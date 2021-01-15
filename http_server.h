@@ -1,0 +1,335 @@
+/*
+ * http_server_request.h
+ *
+ *  Created on: 9. 1. 2021
+ *      Author: ondra
+ */
+
+#ifndef SRC_MAIN_HTTP_SERVER_H_
+#define SRC_MAIN_HTTP_SERVER_H_
+#include <vector>
+#include <string_view>
+#include <functional>
+#include <map>
+#include <thread>
+
+#include "async_provider.h"
+#include "shared/shared_object.h"
+
+#include "isocket.h"
+#include "socket_server.h"
+#include "stream.h"
+
+enum class ReqEvent {
+	init,
+	header_sent,
+	done
+};
+
+class HttpServerRequest {
+public:
+
+	class ILogger {
+	public:
+		virtual void log(ReqEvent event,const HttpServerRequest &req) noexcept = 0;
+		virtual void handler_log(const std::string_view &msg) noexcept = 0;
+	};
+
+	class HeaderValue: public std::string_view {
+	public:
+		HeaderValue(const std::string_view &s):std::string_view(s) {}
+		HeaderValue():defined(false) {};
+		const bool defined = true;
+		std::size_t getUInt() const;
+	};
+
+	using KeepAliveCallback = CallbackT<void(Stream &, HttpServerRequest &)>;
+
+	///Create request and give it a stream. Also register callback for keepalive
+	/**
+	 * @param stream stream
+	 * @param callback keep alive callback allows to continue in request - note, callback
+	 * is not called when keep alive is not enabled
+	 */
+	HttpServerRequest();
+	~HttpServerRequest();
+
+	void initAsync(Stream &&stream, CallbackT<void(bool)> &&initDone);
+
+	bool init(Stream &&stream);
+
+	void reuse_buffers(HttpServerRequest &from);
+
+	void setKeepAliveCallback(KeepAliveCallback &&kc);
+	void setLogger(ILogger *log) {logger = log;}
+
+	template<typename ... Args>
+	void log(const Args & ... data);
+
+	///Returns true, if successfully parsed, or false if parse error
+	bool isValid();
+
+	HeaderValue get(const std::string_view &item) const;
+	std::string_view getMethod() const;
+	std::string_view getURI()  const;
+	std::string_view getHTTPVer()  const;
+
+
+	void set(const std::string_view &key, const std::string_view &value);
+	void set(const std::string_view &key, std::size_t number);
+
+	void setStatus(int code);
+	void setStatus(int code, const std::string_view &message);
+	void setContentType(const std::string_view &contentType);
+
+	///Send response
+	/** Sends response to output
+	 *
+	 * @param body content to send
+	 */
+	void send(const std::string_view &body);
+
+	///Send response header and initialize stream
+	Stream send();
+
+	///Send file from filesystem
+	/**
+	 * @param path path to file
+	 * @retval true sent
+	 * @retval false file not found on other error
+	 *
+	 * @note etag will be set unless header has already etag. content-type will be set
+	 * unless content-type is already set. When If-None-Match is set in request to matching
+	 * etag, then 304 status is send
+	 */
+	bool sendFile(const std::string_view &path);
+
+	///Sends error page
+	/**
+	 * @param code error page code
+	 *
+	 */
+	void sendErrorPage(int code);
+	///Sends error page
+	/**
+	 *
+	 * @param code error page code
+	 * @param description error description
+	 */
+	void sendErrorPage(int code, const std::string_view &description);
+
+
+	struct CookieDef {
+		int max_age = 0;
+		bool secure = false;
+		bool http_only = false;
+		std::string_view domain;
+		std::string_view path;
+	};
+
+	void setCookie(const std::string_view &name, const std::string_view &value, const CookieDef &cookieDef = {0,false,false});
+
+	static std::size_t maxChunkSize;
+
+	Stream getBody();
+
+	const std::chrono::system_clock::time_point &getRecvTime() const;
+	std::intptr_t getResponseSize() const;
+	unsigned int getStatus() const;
+
+protected:
+
+	bool parse();
+	bool processHeaders();
+
+
+	Stream stream;
+	KeepAliveCallback klcb;
+	ILogger *logger = nullptr;
+	bool enableKeepAlive = false;
+	bool valid = false;
+	bool hasBody = true;
+	std::chrono::system_clock::time_point initTime;
+
+	std::vector<char> firstLine;
+	std::vector<char> inHeaderData;
+	std::vector<char> sendHeader;
+	std::vector<char> logBuffer;
+	std::vector<std::pair<std::string_view, std::string_view> > inHeader;
+	std::string statusMessage;
+	std::string_view method, uri, httpver;
+
+	bool parseFirstLine(std::string_view &v);
+	bool parseHeaders(std::string_view &v);
+
+	//---- response fields
+
+	bool response_sent = false;
+	unsigned int statusCode = 200;
+	bool has_content_type = false;
+	bool has_date = false;
+	bool has_transfer_encoding = false;
+	bool has_transfer_encoding_chunked = false;
+	bool has_content_length = false;
+	bool has_connection = false;
+	bool has_last_modified = false;
+	std::size_t send_content_length = 0;
+
+	bool readHeader();
+	bool readHeader(std::string_view &buff, int &m);
+	template<typename Fn>
+	void readHeaderAsync(int m, Fn &&done);
+
+	template<typename T, typename ... Args>
+	void log2(const T &a, const Args & ... args);
+	void log2();
+};
+
+using PHttpServerRequest = std::unique_ptr<HttpServerRequest>;
+
+class SocketServer;
+
+class HttpServerMapper {
+public:
+
+	HttpServerMapper();
+	using Handler = std::function<bool(PHttpServerRequest &, const std::string_view &)>;
+
+	void addPath(const std::string_view &path, Handler &&handler);
+	void serve(Stream &&stream);
+
+	bool execHandler(PHttpServerRequest &req, const std::string_view &vpath);
+	///Automatically detect prefix on given host
+	/**
+	 * @param req request as r-value, it is moved to the handler, when true is returned
+	 * @retval true handler executed, request handled by the handler
+	 * @retval false handler not executed, request is still owned by the caller
+	 *
+	 * @note function detects and remembers prefix for given host. This allows to perform 1:1
+	 * mapping on proxy server without path transformation. Detection is done by removing
+	 * prefixes until the handler process the request. Then the mapping is remembered
+	 *
+	 */
+	bool execHandlerByHost(PHttpServerRequest &req);
+
+protected:
+
+
+	struct PathMapping {
+
+		std::map<std::string, std::string, std::less<> > hostMapping;
+		std::map<std::string, Handler, std::less<> > pathMapping;
+		std::shared_timed_mutex shrmux;
+	};
+	using PPathMapping = ondra_shared::SharedObject<PathMapping>;
+	PPathMapping mapping;
+
+};
+
+class HttpServer: public HttpServerMapper {
+public:
+
+	///Start the server
+	/**
+	 * @param listenSockets list of addresses to listen
+	 * @param threads count of threads processing the requests. When 0 is passed, then no threads are created,
+	 * but you can add threads manually by addThread()
+	 * @param dispatchers count of dispatchers, which monitors pending connections. Must be less or equal to threads
+	 */
+	void start(NetAddrList listenSockets, unsigned int threads, unsigned int dispatchers = 1);
+	///Stop the server
+	/**
+	 * Function joins all threads, will block until the operation completes
+	 * @note if there is work in thread, it will wait until work is finish. All pending asynchronous
+	 * operations are canceled. If there are associated data, they should be stored in
+	 * callbacks' clousures, because they are deleted as expected, so these data can be disposed in
+	 * this time.
+	 */
+	void stop();
+
+	///Add thread to pool
+	/** Thread which called this function becomes the pool thread. Note that thread is not joined
+	 * during stop
+	 */
+	void addThread();
+
+	///Receive asynchronous provider
+	AsyncProvider getAsyncProvider();
+	///automatically calls stop()
+	virtual ~HttpServer();
+	///Overridable
+	/**
+	 * Logs every request
+	 * @param event which event is logged
+	 * @param req request itself
+	 *
+	 * @note this function can be called from various threads and in parallel. If you log some
+	 * events, you need to use proper synchronization while accessing shared log file. Use synchronization
+	 * when you really needit, because this destroys purpose of paralelisation. It is better to use
+	 * per-thread buffers and occasionaly flush them with synchronization
+	 */
+	virtual void log(ReqEvent event, const HttpServerRequest &req);
+
+	///Overridable
+	/**
+	 * Receives log message generated by handler. Useful to collect logs from handlers, which are
+	 * executed in various threads.
+	 *
+	 * @param msg message logged.
+	 */
+	virtual void log(const std::string_view &msg);
+	///Allows to catch special connections before they are processed as HTTP request
+	/**
+	 * @param s stream containing new connection
+	 * @retval true connection handled, no futher processing is done.
+	 * @retval false connection is not handled, continue processing as http
+	 *
+	 * If you need process connection asynchronously, you need to pick ownership of the stream
+	 * and return true. Once you know, that connection is a HTTP request, you can call process()
+	 * to continue processing as HTTP
+	 */
+	virtual bool onConnect(Stream &s) {return false;}
+
+	///Process arbitrary stream as HTTP request
+	/**
+	 * @param s stream to process. Note that fuction immediatelly returns because stream is
+	 * processed asynchronously. You are loosing ownership of the stream
+	 */
+	void process(Stream &&s);
+
+
+protected:
+	std::vector<std::thread> threads;
+	AsyncProvider asyncProvider;
+	std::optional<SocketServer> socketServer;
+	std::unique_ptr<HttpServerRequest::ILogger> logger;
+	std::mutex lock;
+
+	void listen();
+	void beginRequest(Stream &&s, PHttpServerRequest &&req);
+
+	void buildLogMsg(std::ostream &stream, const HttpServerRequest &req);
+	void buildLogMsg(std::ostream &stream, const std::string_view &msg);
+
+
+};
+
+void formatToLog(std::vector<char> &log, const std::string_view &txt);
+void formatToLog(std::vector<char> &log, const std::intptr_t &v);
+void formatToLog(std::vector<char> &log, const std::uintptr_t &v);
+void formatToLog(std::vector<char> &log, const double &v);
+
+
+template<typename ... Args>
+inline void HttpServerRequest::log(const Args &... data) {
+	if (!logger) return;
+	log2(data...);
+}
+
+template<typename T, typename ... Args>
+inline void HttpServerRequest::log2(const T &a, const Args &... args) {
+	formatToLog(logBuffer, a);
+	log2(args...);
+}
+
+#endif /* SRC_MAIN_HTTP_SERVER_H_ */
