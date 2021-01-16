@@ -28,6 +28,8 @@ std::string_view SocketStream::read() {
 	return out;
 }
 
+std::size_t SocketStream::maxWrBufferSize = 65536;
+
 void SocketStream::putBack(const std::string_view &pb) {
 	curbuff = pb;
 }
@@ -76,14 +78,14 @@ void SocketStream::flushAsync(const std::string_view &data, bool firstCall, Call
 	} else {
 		sock->writeAsync(data.data(), data.size(), [this, data, firstCall, fn = std::move(fn)](int r) mutable {
 			if (r <= 0) {
-				if (!firstCall) wrbufflimit = wrbufflimit * 3 / 2;
 				wrbuff.clear();
 				fn(false);
 			} else if (static_cast<std::size_t>(r) == data.size()) {
+				wrbufflimit = std::min(wrbufflimit * 3 / 2, maxWrBufferSize);
 				wrbuff.clear();
 				fn(true);
 			} else {
-				if (!firstCall) wrbufflimit = r * 2 / 3 + 1;
+				if (!firstCall) wrbufflimit = (r * 2 + 2) / 3 ;
 				flushAsync(data.substr(r), false, std::move(fn));
 			}
 		});
@@ -108,17 +110,15 @@ void SocketStream::flush_lk() {
 	std::string_view s(wrbuff);
 	unsigned int wx = sock->write(s.data(),s.length());
 	bool rep = wx < s.length();
-	bool increase_lm = rep;
 	while (rep) {
 		s = s.substr(wx);
 		wx = sock->write(s.data(),s.length());
 		rep = wx < s.length();
 		if (rep && wx < wrbufflimit) {
-			increase_lm = false;
-			wrbufflimit = wx * 2 / 3 + 1;
+			wrbufflimit = (wx * 2+2) / 3;
 		}
 	}
-	if (increase_lm) wrbufflimit = wrbufflimit *3/2;
+	wrbufflimit = std::min(wrbufflimit *3/2, maxWrBufferSize);
 	wrbuff.clear();
 }
 
@@ -144,4 +144,8 @@ void SocketStream::readAsync(CallbackT<void(const std::string_view &data)> &&fn)
 			fn(out);
 		});
 	}
+}
+
+std::size_t SocketStream::getOutputBufferSize() const {
+	return wrbufflimit;
 }

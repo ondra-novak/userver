@@ -11,7 +11,9 @@
 #include <fcntl.h>
 #include <cerrno>
 
-Dispatcher::Dispatcher() {
+Dispatcher::Dispatcher()
+:stopped(false)
+{
 	int fds[2];
 	::pipe2(fds, O_CLOEXEC|O_NONBLOCK);
 	intr_r = fds[0];

@@ -28,6 +28,7 @@ public:
 	virtual void flushAsync(CallbackT<void(bool)> &&fn) = 0;
 	virtual bool timeouted() const = 0;
 	virtual ~AbstractStream() {};
+	virtual std::size_t getOutputBufferSize() const = 0;
 
 };
 
@@ -225,7 +226,7 @@ public:
 	 */
 	template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<Stream &>(), std::declval<bool>()))>
 	void flushAsync(Fn &&fn) {
-		ptr->flushAsync([fn = std::move(fn), s = Stream(*this)](bool succ) mutable {
+		ptr->flushAsync([fn = std::move(fn), s = std::move(*this)](bool succ) mutable {
 			fn(s, succ);
 		});
 	}
@@ -328,6 +329,8 @@ public:
 	}
 	bool valid() const {return ptr != nullptr;}
 	bool owned() const {return owner;}
+
+	std::size_t getOutputBufferSize() const {return ptr->getOutputBufferSize();}
 protected:
 	AbstractStream *ptr;
 	bool owner;
@@ -348,7 +351,10 @@ public:
 	virtual void flush() override;
 	virtual void flushAsync(CallbackT<void(bool)> &&fn) override;
 	virtual bool timeouted() const override;
+	virtual std::size_t getOutputBufferSize() const override;
 	ISocket &getSocket() const;
+
+	static std::size_t maxWrBufferSize;
 
 protected:
 	std::unique_ptr<ISocket> sock;
@@ -383,6 +389,7 @@ public:
 	virtual void flush() override;
 	virtual void flushAsync(CallbackT<void(bool)> &&fn) override;
 	virtual bool timeouted() const override;
+	virtual std::size_t getOutputBufferSize() const override;
 protected:
 	SS source;
 	unsigned int maxRead;
@@ -401,8 +408,10 @@ protected:
 template<typename SS>
 class ChunkedStream: public AbstractStream {
 public:
-	ChunkedStream(SS &&source, std::size_t maxChunkSize)
-		:source(std::forward<SS>(source)),maxChunkSize(maxChunkSize) {}
+	ChunkedStream(SS &&source,bool writing, bool reading)
+		:source(std::forward<SS>(source)),eof(!reading),writing(writing),reading(reading),closed(!writing) {
+		maxChunkSize = std::max<decltype(maxChunkSize)>(source.getOutputBufferSize(),20)-20;
+	}
 	~ChunkedStream();
 	virtual std::string_view read() override;
 	virtual void readAsync(CallbackT<void(const std::string_view &data)> &&fn) override;
@@ -414,10 +423,13 @@ public:
 	virtual void flush() override;
 	virtual void flushAsync(CallbackT<void(bool)> &&fn) override;
 	virtual bool timeouted() const override;
+	virtual std::size_t getOutputBufferSize() const override;
 protected:
 	SS source;
 	std::size_t maxChunkSize;
 	bool eof = false;
+	bool writing = false;
+	bool reading = false;
 	bool closed  =false;
 	std::size_t readRemain = 0;
 	std::string curChunk;
@@ -428,33 +440,6 @@ protected:
 	bool flushNB();
 };
 
-///Creates reference to another stream
-/**
- * Useful, if you need to created new Stream object which actually referes to other
- * stream which ownership is retained to original object
- * @tparam SS
- */
-template<typename SS>
-class StreamRef: public AbstractStream {
-public:
-	StreamRef(SS &&source):source(std::forward<SS>(source)) {}
-	virtual std::string_view read() override {return source.read();}
-	virtual void readAsync(CallbackT<void(const std::string_view &data)> &&fn) override {
-		source.readAsync(std::move(fn));
-	}
-	virtual void putBack(const std::string_view &pb) override {return source.putBack(pb);}
-	virtual void write(const std::string_view &data) override {return source.write(data);}
-	virtual bool writeNB(const std::string_view &data) override {return source.writeNB(data);}
-	virtual void closeOutput() override {return source.closeOutput();}
-	virtual void closeInput() override {return source.closeInput();}
-	virtual void flush() override {return source.flush();}
-	virtual void flushAsync(CallbackT<void(bool)> &&fn) override {
-		source.flushAsync(std::move(fn));
-	}
-	virtual bool timeouted() const override {return source.timeouted();}
-protected:
-	SS source;
-};
 
 
 template<typename SS>
@@ -551,6 +536,8 @@ inline ChunkedStream<SS>::~ChunkedStream() {
 template<typename SS>
 inline std::string_view ChunkedStream<SS>::read() {
 	if (curBuff.empty()) {
+		if (!reading)
+			return std::string_view();
 		if (eof) return std::string_view();
 		if (readRemain == 0) {
 			ln.clear();
@@ -583,7 +570,7 @@ inline void ChunkedStream<SS>::putBack(const std::string_view &pb) {
 template<typename SS>
 inline void ChunkedStream<SS>::write(const std::string_view &data) {
 	curChunk.append(data);
-	if (curChunk.length() > maxChunkSize) flush();
+	if (curChunk.length() >= maxChunkSize) flush();
 
 }
 
@@ -591,7 +578,7 @@ template<typename SS>
 inline void ChunkedStream<SS>::closeOutput() {
 	if (!closed) {
 		flush();
-		source.write("\r\n0\r\n");
+		source.write("0\r\n\r\n");
 		source.flush();
 		closed = true;
 	}
@@ -599,12 +586,24 @@ inline void ChunkedStream<SS>::closeOutput() {
 
 template<typename SS>
 inline void ChunkedStream<SS>::closeInput() {
-	while (!eof) read();
+	if (reading) {
+		while (!eof) read();
+	}
 }
 
 template<typename SS>
 inline void ChunkedStream<SS>::flush() {
-	if (flushNB()) flush();
+	flushNB();
+	if (closed) curChunk.clear();
+	else {
+		source.flush();
+		maxChunkSize = std::max<decltype(maxChunkSize)>(source.getOutputBufferSize(),20)-20;
+	}
+}
+
+template<typename SS>
+inline std::size_t ChunkedStream<SS>::getOutputBufferSize() const {
+	return maxChunkSize;
 }
 
 template<typename SS>
@@ -649,14 +648,25 @@ inline bool ChunkedStream<SS>::writeNB(const std::string_view &data) {
 template<typename SS>
 inline void ChunkedStream<SS>::flushAsync(CallbackT<void(bool)> &&fn) {
 	flushNB();
-	source.flushAsync(std::move(fn));
+	if (closed) curChunk.clear();
+	else {
+		source.flushAsync(std::move(fn));
+		maxChunkSize = std::max<decltype(maxChunkSize)>(source.getOutputBufferSize(),20)-20;
+	}
 }
 
 template<typename SS>
 inline void ChunkedStream<SS>::putHex(std::size_t sz) {
-	if (sz != 0) putHex(sz>>4);
-	char chars[] = "0123456789ABCDEF";
-	source.putCharNB(chars[sz % 0xF]);
+	if (sz != 0) {
+		putHex(sz>>4);
+		char chars[] = "0123456789ABCDEF";
+		source.putCharNB(chars[sz & 0xF]);
+	}
+}
+
+template<typename SS>
+inline std::size_t LimitedStream<SS>::getOutputBufferSize() const {
+	return source.getOutputBufferSize();
 }
 
 #endif /* SRC_MAIN_STREAM_H_ */

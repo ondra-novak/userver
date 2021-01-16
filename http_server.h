@@ -94,15 +94,21 @@ public:
 
 	///Send file from filesystem
 	/**
-	 * @param path path to file
-	 * @retval true sent
-	 * @retval false file not found on other error
+	 * @param reqptr request pointer (wrapped to unique ptr)
+	 * @param path path to file to send
+	 * @retval true file transfer started
+	 * @retval false file not found
 	 *
 	 * @note etag will be set unless header has already etag. content-type will be set
 	 * unless content-type is already set. When If-None-Match is set in request to matching
 	 * etag, then 304 status is send
+	 *
+	 * @note File is transfered asynchronously. ownership of the pointer is held during
+	 * the file transfer. In case of true return you should no longer access the
+	 * request object.
+	 *
 	 */
-	bool sendFile(const std::string_view &path);
+	static bool sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, const std::string_view &path);
 
 	///Sends error page
 	/**
@@ -137,10 +143,14 @@ public:
 	std::intptr_t getResponseSize() const;
 	unsigned int getStatus() const;
 
+	template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<std::string_view>()))>
+	void readBodyAsync(std::size_t maxSize, Fn &&fn);
+
 protected:
 
 	bool parse();
 	bool processHeaders();
+	static void sendFileAsync(std::unique_ptr<HttpServerRequest> &reqptr, std::unique_ptr<std::istream>&in, Stream &out);
 
 
 	Stream stream;
@@ -149,6 +159,7 @@ protected:
 	bool enableKeepAlive = false;
 	bool valid = false;
 	bool hasBody = true;
+	bool hasExpect = false;
 	std::chrono::system_clock::time_point initTime;
 
 	std::vector<char> firstLine;
@@ -183,6 +194,10 @@ protected:
 	template<typename T, typename ... Args>
 	void log2(const T &a, const Args & ... args);
 	void log2();
+
+	template<typename Fn>
+	void readBodyAsync2(Stream &s, std::vector<char> &buffer, std::size_t maxSize, bool overflow, Fn &&fn);
+
 };
 
 using PHttpServerRequest = std::unique_ptr<HttpServerRequest>;
@@ -331,5 +346,38 @@ inline void HttpServerRequest::log2(const T &a, const Args &... args) {
 	formatToLog(logBuffer, a);
 	log2(args...);
 }
+
+template<typename Fn, typename>
+void HttpServerRequest::readBodyAsync(std::size_t maxSize, Fn &&fn) {
+	std::vector<char> buffer;
+	HeaderValue hv = get("Content-Length");
+	if (hv.defined() && hv.getUInt()>maxSize) {
+		sendErrorPage(413);
+	} else {
+		readBodyAsync2(buffer, maxSize, false, std::move(fn));
+	}
+}
+
+template<typename Fn>
+void HttpServerRequest::readBodyAsync2(Stream &s, std::vector<char> &buffer, std::size_t maxSize, bool overflow, Fn &&fn) {
+	s.readAsync([buffer = std::move(buffer), maxSize, fn = std::move(fn), overflow, this](Stream &s, const std::string_view &data) mutable {
+		if (data.size() + buffer.size() > maxSize) {
+			overflow = true;
+		} else if (data.empty()) {
+			if (overflow) {
+				sendErrorPage(413);
+			} else {
+				fn(std::string_view(data.data(), data.size()));
+			}
+			return;
+		} else {
+			std::copy(data.begin(), data.end(), std::back_inserter(buffer));
+		}
+		readBodyAsync2(s, buffer, s, maxSize, overflow, std::move(fn));
+	});
+}
+
+
+
 
 #endif /* SRC_MAIN_HTTP_SERVER_H_ */
