@@ -71,6 +71,8 @@ static std::string_view statusMessages[] = {
 #define CRLF "\r\n"
 #define DATE "Date"
 
+std::atomic<std::size_t> HttpServerRequest::identCounter(0);
+
 static std::string_view getStatusCodeMsg(int code) {
 	char num[100];
 	sprintf(num,"%d",code);
@@ -278,8 +280,13 @@ void HttpServerRequest::reuse_buffers(HttpServerRequest &from) {
 	logBuffer.clear();
 }
 
+std::size_t HttpServerRequest::getIdent() const {
+	return ident;
+}
+
 void HttpServerRequest::initAsync(Stream &&stream, CallbackT<void(bool)> &&initDone) {
 	this->stream = std::move(stream);
+	ident = ++identCounter;
 	readHeaderAsync(0, [this, initDone = std::move(initDone)](bool v){
 		initTime = std::chrono::system_clock::now();
 		valid = v && parse() && processHeaders();
@@ -295,6 +302,7 @@ const std::chrono::system_clock::time_point &HttpServerRequest::getRecvTime() co
 
 bool HttpServerRequest::init(Stream &&stream) {
 	this->stream = std::move(stream);
+	ident = ++identCounter;
 	initTime = std::chrono::system_clock::now();
 	valid = readHeader() && parse() && processHeaders();
 	if (logger) logger->log(ReqEvent::init, *this);
@@ -474,9 +482,13 @@ void HttpServerRequest::send(const std::string_view &body) {
 	}
 	Stream s = send();
 	s.write(body);
+	s.flush();
 }
 
 Stream HttpServerRequest::send() {
+	if (response_sent) {
+		throw std::runtime_error("Response already sent (can't use send() twice during single request)s");
+	}
 	if (hasBody && !hasExpect) {
 		//handler did not pick body - and Expect: 100-continue is not set
 		//this can happen, when error is send without reading body
@@ -549,22 +561,24 @@ void HttpServerRequest::sendErrorPage(int code) {
 }
 
 void HttpServerRequest::sendErrorPage(int code, const std::string_view &description) {
-	std::ostringstream body;
-	auto msg = getStatusCodeMsg(code);
-	body << "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-			"<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">"
-			"<html xmlns=\"http://www.w3.org/1999/xhtml\">"
-			"<head>"
-			"<title>" << code << " " << msg<<"</title>"
-			"</head>"
-			"<body>"
-			"<h1>"  << code << " " << msg <<"</h1>"
-			"<p><![CDATA[" << description << "]]></p>"
-			"</body>"
-			"</html>";
-	setContentType("application/xhtml+xml");
-	setStatus(code);
-	send(body.str());
+	if (!response_sent) {
+		std::ostringstream body;
+		auto msg = getStatusCodeMsg(code);
+		body << "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+				"<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">"
+				"<html xmlns=\"http://www.w3.org/1999/xhtml\">"
+				"<head>"
+				"<title>" << code << " " << msg<<"</title>"
+				"</head>"
+				"<body>"
+				"<h1>"  << code << " " << msg <<"</h1>"
+				"<p><![CDATA[" << description << "]]></p>"
+				"</body>"
+				"</html>";
+		setContentType("application/xhtml+xml");
+		setStatus(code);
+		send(body.str());
+	}
 
 }
 
@@ -852,7 +866,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 class Logger: public HttpServerRequest::ILogger {
 public:
 	Logger(HttpServer &owner):owner(owner) {}
-	virtual void handler_log(const std::string_view &msg) noexcept;
+	virtual void handler_log(const HttpServerRequest &req, const std::string_view &msg) noexcept;
 	virtual void log(ReqEvent event, const HttpServerRequest &req) noexcept;
 	HttpServer &owner;
 };
@@ -920,7 +934,7 @@ void HttpServer::log(ReqEvent event, const HttpServerRequest &req) {
 	}
 }
 
-void HttpServer::log(const std::string_view &msg) {
+void HttpServer::log(const HttpServerRequest &req, const std::string_view &msg) {
 	std::lock_guard _(lock);
 	buildLogMsg(std::cout, msg);
 }
@@ -948,7 +962,7 @@ void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
 }
 
 void HttpServerRequest::log2() {
-	logger->handler_log(std::string_view(logBuffer.data(), logBuffer.size()));
+	logger->handler_log(*this, std::string_view(logBuffer.data(), logBuffer.size()));
 	logBuffer.clear();
 }
 
@@ -1002,8 +1016,8 @@ void formatToLog(std::vector<char> &log, const double &v) {
 	formatToLog(log, std::to_string(v));
 }
 
-void Logger::handler_log(const std::string_view &msg) noexcept {
-	owner.log(msg);
+void Logger::handler_log(const HttpServerRequest &req, const std::string_view &msg) noexcept {
+	owner.log(req, msg);
 }
 
 void Logger::log(ReqEvent event, const HttpServerRequest &req) noexcept {

@@ -3,7 +3,6 @@
 
 #include <algorithm>
 
-namespace simpleServer {
 
 
 
@@ -172,4 +171,4 @@ bool QueryParser::orderItems(const Item& a, const Item& b) {
 	return a.first < b.first;
 }
 
-}
+

@@ -329,6 +329,32 @@ public:
 	}
 	bool valid() const {return ptr != nullptr;}
 	bool owned() const {return owner;}
+	template<typename T>
+	bool putUnsignedNB(const T &x, unsigned int base = 10, int lpad = 1) {
+		if (x == 0 && lpad < 0) return false;
+		putUnsignedNB(x/base, base, lpad-1);
+		unsigned int s = x%base;
+		if (s < 10) return putCharNB(s+'0');
+		else if (s < 36) return putCharNB(s+'A'-10);
+		else return putCharNB(s+'a'-36);
+	}
+	template<typename T>
+	void putUnsigned(const T &x, unsigned int base = 10, int lpad = 1) {
+		if (putUnsignedNB(x,base,lpad)) flush();
+	}
+	template<typename T>
+	bool putSignedNB(const T &x, unsigned int base = 10, int lpad = 1) {
+		if (x < 0) {
+			putCharNB('-');
+			return putUnsignedNB(-x, base, lpad);
+		} else {
+			return putUnsignedNB(x, base, lpad);
+		}
+	}
+	template<typename T>
+	void putSigned(const T &x, unsigned int base = 10, int lpad = 1) {
+		if (putSignedNB(x,base,lpad)) flush();
+	}
 
 	std::size_t getOutputBufferSize() const {return ptr->getOutputBufferSize();}
 protected:
@@ -534,8 +560,12 @@ inline bool LimitedStream<SS>::timeouted() const {
 
 template<typename SS>
 inline ChunkedStream<SS>::~ChunkedStream() {
-	closeOutput();
-	closeInput();
+	try {
+		closeOutput();
+		closeInput();
+	} catch (...) {
+
+	}
 }
 
 template<typename SS>

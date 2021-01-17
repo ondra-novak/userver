@@ -11,6 +11,7 @@
 
 #include <sys/socket.h>
 #include <unistd.h>
+#include <csignal>
 #include <cstring>
 #include <sstream>
 
@@ -23,6 +24,7 @@ Socket::Socket(Socket &&other)
 :s(other.s), readtm(other.readtm), writetm(other.writetm), tm(other.tm)
 {
 	other.s = -1;
+	signal(SIGPIPE, SIG_IGN);
 }
 
 Socket& Socket::operator =(Socket &&other) {

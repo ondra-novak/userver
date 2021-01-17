@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "header_value.h"
-namespace simpleServer {
+
 
 class QueryParser{
 
@@ -47,9 +47,3 @@ protected:
 
 
 
-
-
-
-
-
-}

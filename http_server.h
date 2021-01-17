@@ -33,7 +33,7 @@ public:
 	class ILogger {
 	public:
 		virtual void log(ReqEvent event,const HttpServerRequest &req) noexcept = 0;
-		virtual void handler_log(const std::string_view &msg) noexcept = 0;
+		virtual void handler_log(const HttpServerRequest &req, const std::string_view &msg) noexcept = 0;
 	};
 
 	using KeepAliveCallback = CallbackT<void(Stream &, HttpServerRequest &)>;
@@ -139,7 +139,10 @@ public:
 	Stream &getStream();
 
 	bool isBodyAvailable() const {return hasBody;}
+	///Returns true, when headers has been already sent
+	bool headersSent() const {return response_sent;}
 
+	std::size_t getIdent() const;
 
 	const std::chrono::system_clock::time_point &getRecvTime() const;
 	std::intptr_t getResponseSize() const;
@@ -162,7 +165,10 @@ protected:
 	bool valid = false;
 	bool hasBody = true;
 	bool hasExpect = false;
+	std::size_t ident = 0;
 	std::chrono::system_clock::time_point initTime;
+
+	static std::atomic<std::size_t> identCounter;
 
 	std::vector<char> firstLine;
 	std::vector<char> inHeaderData;
@@ -295,7 +301,7 @@ public:
 	 *
 	 * @param msg message logged.
 	 */
-	virtual void log(const std::string_view &msg);
+	virtual void log(const HttpServerRequest &req, const std::string_view &msg);
 	///Allows to catch special connections before they are processed as HTTP request
 	/**
 	 * @param s stream containing new connection
