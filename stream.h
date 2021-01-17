@@ -445,6 +445,7 @@ protected:
 template<typename SS>
 std::string_view LimitedStream<SS>::read() {
 	if (curBuff.empty()) {
+		if (maxRead == 0) return std::string_view();
 		auto rd = source.read();
 		auto res = rd.substr(0, maxRead);
 		source.putBack(rd.substr(res.length()));
@@ -498,10 +499,14 @@ inline LimitedStream<SS>::~LimitedStream() {
 template<typename SS>
 inline void LimitedStream<SS>::readAsync(CallbackT<void(const std::string_view &data)> &&fn) {
 	if (curBuff.empty()) {
-		source.readAsync([fn = std::move(fn), this](const std::string_view &data) mutable {
-			curBuff = data;
-			fn(read());
-		});
+		if (maxRead == 0) {
+			fn(std::string_view());
+		} else {
+			source.readAsync([fn = std::move(fn), this](const std::string_view &data) mutable {
+				source.putBack(data);
+				fn(read());
+			});
+		}
 	} else {
 		std::string_view b;
 		std::swap(b, curBuff);
@@ -629,7 +634,7 @@ template<typename SS>
 inline void ChunkedStream<SS>::readAsync(CallbackT<void(const std::string_view &data)> &&fn) {
 	if (curBuff.empty()) {
 		source.readAsync([fn = std::move(fn),this](const std::string_view &data) {
-			curBuff = data;
+			source.putBack(data);
 			fn(read());
 		});
 	} else {

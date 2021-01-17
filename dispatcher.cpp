@@ -15,7 +15,9 @@ Dispatcher::Dispatcher()
 :stopped(false)
 {
 	int fds[2];
-	::pipe2(fds, O_CLOEXEC|O_NONBLOCK);
+	if (::pipe2(fds, O_CLOEXEC|O_NONBLOCK)<0) {
+		throw std::system_error(errno, std::generic_category());
+	}
 	intr_r = fds[0];
 	intr_w = fds[1];
 	waiting.push_back({intr_r,POLLIN,0});
@@ -45,7 +47,9 @@ void Dispatcher::notify() {
 	char b = 1;
 	if (!::write(intr_w, &b, 1)) {
 		int e = errno;
-		throw std::system_error(e, std::generic_category());
+		if (e != EWOULDBLOCK) {
+			throw std::system_error(e, std::generic_category());
+		}
 	}
 
 }
@@ -101,7 +105,9 @@ Dispatcher::Task Dispatcher::getTask() {
 					waiting[idx].events = POLLIN;
 					std::unique_lock _(lk);
 					char buff[100];
-					::read(waiting[idx].fd, buff, 100);
+					if (::read(waiting[idx].fd, buff, 100)<0) {
+						throw std::system_error(errno, std::generic_category());
+					}
 					++lastIdx;
 					if (stopped) {
 						waiting.clear();

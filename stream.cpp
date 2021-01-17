@@ -134,7 +134,6 @@ void SocketStream::readAsync(CallbackT<void(const std::string_view &data)> &&fn)
 				if (sz == static_cast<int>(rdbuff.size())) rdbuff.resize(sz*3/2);
 				out = rdbuff;
 				out = out.substr(0, sz);
-				putBack(out);
 			}
 			fn(out);
 		});

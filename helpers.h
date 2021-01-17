@@ -65,6 +65,9 @@ public:
 			virtual Ret invoke(Args ... args) const override {
 				return fn(std::forward<Args>(args)...);
 			}
+			~Impl() {
+
+			}
 		protected:
 			mutable std::remove_reference_t<Fn> fn;
 		};

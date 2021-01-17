@@ -19,6 +19,7 @@
 #include "isocket.h"
 #include "socket_server.h"
 #include "stream.h"
+#include "header_value.h"
 
 enum class ReqEvent {
 	init,
@@ -33,14 +34,6 @@ public:
 	public:
 		virtual void log(ReqEvent event,const HttpServerRequest &req) noexcept = 0;
 		virtual void handler_log(const std::string_view &msg) noexcept = 0;
-	};
-
-	class HeaderValue: public std::string_view {
-	public:
-		HeaderValue(const std::string_view &s):std::string_view(s) {}
-		HeaderValue():defined(false) {};
-		const bool defined = true;
-		std::size_t getUInt() const;
 	};
 
 	using KeepAliveCallback = CallbackT<void(Stream &, HttpServerRequest &)>;
@@ -73,6 +66,7 @@ public:
 	std::string_view getMethod() const;
 	std::string_view getURI()  const;
 	std::string_view getHTTPVer()  const;
+	std::string_view getHost()  const;
 
 
 	void set(const std::string_view &key, const std::string_view &value);
@@ -137,7 +131,15 @@ public:
 
 	static std::size_t maxChunkSize;
 
+	///Get body
+	/** The body can be read once only */
 	Stream getBody();
+
+	///Get original stream (various protocols need to access stream directly, such a websockets)
+	Stream &getStream();
+
+	bool isBodyAvailable() const {return hasBody;}
+
 
 	const std::chrono::system_clock::time_point &getRecvTime() const;
 	std::intptr_t getResponseSize() const;
@@ -168,7 +170,7 @@ protected:
 	std::vector<char> logBuffer;
 	std::vector<std::pair<std::string_view, std::string_view> > inHeader;
 	std::string statusMessage;
-	std::string_view method, uri, httpver;
+	std::string_view method, uri, httpver, host;
 
 	bool parseFirstLine(std::string_view &v);
 	bool parseHeaders(std::string_view &v);
@@ -184,6 +186,7 @@ protected:
 	bool has_content_length = false;
 	bool has_connection = false;
 	bool has_last_modified = false;
+	bool has_server = false;
 	std::size_t send_content_length = 0;
 
 	bool readHeader();
@@ -208,7 +211,7 @@ class HttpServerMapper {
 public:
 
 	HttpServerMapper();
-	using Handler = std::function<bool(PHttpServerRequest &, const std::string_view &)>;
+	using Handler = CallbackT<bool(PHttpServerRequest &, const std::string_view &)>;
 
 	void addPath(const std::string_view &path, Handler &&handler);
 	void serve(Stream &&stream);
@@ -351,11 +354,18 @@ template<typename Fn, typename>
 void HttpServerRequest::readBodyAsync(std::size_t maxSize, Fn &&fn) {
 	std::vector<char> buffer;
 	HeaderValue hv = get("Content-Length");
-	if (hv.defined() && hv.getUInt()>maxSize) {
-		sendErrorPage(413);
-	} else {
-		readBodyAsync2(buffer, maxSize, false, std::move(fn));
+	if (hv.defined){
+		auto sz = hv.getUInt();
+		if (sz >maxSize) {
+			sendErrorPage(413);
+			return ;
+		} else {
+			buffer.reserve(sz);
+		}
 	}
+	Stream s = getBody();
+	readBodyAsync2(s, buffer, maxSize, false, std::move(fn));
+
 }
 
 template<typename Fn>
@@ -367,13 +377,20 @@ void HttpServerRequest::readBodyAsync2(Stream &s, std::vector<char> &buffer, std
 			if (overflow) {
 				sendErrorPage(413);
 			} else {
-				fn(std::string_view(data.data(), data.size()));
+				try {
+					fn(std::string_view(buffer.data(), buffer.size()));
+				} catch (std::exception &e) {
+					log("Exception:", e.what());
+					sendErrorPage(500);
+				} catch (...) {
+					sendErrorPage(500);
+				}
 			}
 			return;
 		} else {
 			std::copy(data.begin(), data.end(), std::back_inserter(buffer));
 		}
-		readBodyAsync2(s, buffer, s, maxSize, overflow, std::move(fn));
+		readBodyAsync2(s, buffer, maxSize, overflow, std::move(fn));
 	});
 }
 

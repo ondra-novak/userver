@@ -8,5 +8,6 @@ add_library (miniserver
 	http_server.cpp
 	dispatcher.cpp
 	async_provider.cpp
+	query_parser.cpp
 )
 

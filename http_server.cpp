@@ -95,7 +95,7 @@ static std::string_view getStatusCodeMsg(int code) {
 
 std::size_t HttpServerRequest::maxChunkSize = 16384;
 
-std::size_t HttpServerRequest::HeaderValue::getUInt() const {
+std::size_t HeaderValue::getUInt() const {
 	std::size_t n = 0;
 	for (char c: *this) {
 		if (isdigit(c)) n = n * 10 + (c - '0'); else return 0;
@@ -197,7 +197,10 @@ void HttpServerRequest::readHeaderAsync(int m, Fn &&fn) {
 		}
 		initTime = std::chrono::system_clock::now();
 		bool res = readHeader(data, m);
-		if (res) fn(true);
+		if (res) {
+			stream.putBack(data);
+			fn(true);
+		}
 		else readHeaderAsync(m, std::move(fn));
 	});
 }
@@ -212,7 +215,7 @@ bool HttpServerRequest::parse() {
 	return true;
 }
 
-HttpServerRequest::HeaderValue HttpServerRequest::get(const std::string_view &item) const {
+HeaderValue HttpServerRequest::get(const std::string_view &item) const {
 	std::pair srch(item, std::string_view());
 	auto iter =std::lower_bound(inHeader.begin(), inHeader.end(), srch, lessHeader);
 	if (iter == inHeader.end() || lessHeader(srch, *iter)) return HeaderValue();
@@ -229,6 +232,10 @@ std::string_view HttpServerRequest::getURI() const {
 
 std::string_view HttpServerRequest::getHTTPVer() const {
 	return httpver;
+}
+
+std::string_view HttpServerRequest::getHost() const {
+	return host;
 }
 
 bool HttpServerRequest::parseFirstLine(std::string_view &v) {
@@ -358,13 +365,14 @@ bool HttpServerRequest::processHeaders() {
 		sendErrorPage(411);return false;
 	}
 	hasBody = te == TE_CHUNKED || (ctlh.defined && ctlh != "0");
+	host = get("Host");
 
 	if (httpver == "HTTP/1.1") {
 		if (get(CONNECTION) != CONN_CLOSE) {
 			enableKeepAlive = true;
 		}
 	} else {
-		if (get(CONNECTION) != "keep-alive") {
+		if (get(CONNECTION) == "keep-alive") {
 			enableKeepAlive = true;
 		}
 	}
@@ -405,6 +413,9 @@ void HttpServerRequest::set(const std::string_view &key, const std::string_view 
 		if (iequal(value, CONN_CLOSE)) enableKeepAlive = false;
 	} else if (iequal(key, "Last-Modified") || iequal(key, "ETag")) {
 		has_last_modified = true;
+	}
+	else if (iequal(key, "Server")) {
+		has_server = true;
 	}
 
 	std::string_view crlf(CRLF);
@@ -479,7 +490,7 @@ Stream HttpServerRequest::send() {
 		}
 		if (!has_transfer_encoding) {
 			if (!has_content_length) {
-				if (enableKeepAlive) {
+				if (enableKeepAlive && httpver == "HTTP/1.1") {
 					set("Transfer-Encoding", "chunked");
 				} else if (has_connection) {
 					set("Connection","close");
@@ -496,6 +507,10 @@ Stream HttpServerRequest::send() {
 		 struct tm tm = *gmtime(&now);
 		 strftime(buf, sizeof buf, "%a, %d %b %Y %H:%M:%S %Z", &tm);
 		 set("Date", buf);
+	}
+
+	if (!has_server) {
+		set("Server","userver");
 	}
 
 	std::string_view statusMsg;
@@ -756,21 +771,34 @@ void HttpServerMapper::serve(Stream &&stream) {
 }
 
 bool HttpServerMapper::execHandler(PHttpServerRequest &req, const std::string_view &vpath) {
-	auto m=mapping.lock_shared();
-	std::string_view curvpath = vpath;
-	curvpath = splitAt("?", curvpath);
+	try {
+		auto m=mapping.lock_shared();
+		std::string_view curvpath = vpath;
+		curvpath = splitAt("?", curvpath);
 
-	while (true) {
-		auto iter = m->pathMapping.find(curvpath);
-		if (iter != m->pathMapping.end()) {
-			std::string_view restPath = vpath.substr(curvpath.size());
-			if (req == nullptr || iter->second(req, restPath)) return true;
+		while (true) {
+			auto iter = m->pathMapping.find(curvpath);
+			if (iter != m->pathMapping.end()) {
+				std::string_view restPath = vpath.substr(curvpath.size());
+				if (req == nullptr || iter->second(req, restPath)) return true;
+			}
+			auto spos = curvpath.rfind('/');
+			if (spos == curvpath.npos) break;
+			curvpath = curvpath.substr(0,spos);
 		}
-		auto spos = curvpath.rfind('/');
-		if (spos == curvpath.npos) break;
-		curvpath = curvpath.substr(0,spos);
+		return false;
+	} catch (std::exception &e) {
+		if (req != nullptr) {
+			req->log("Exception:", e.what());
+			req->sendErrorPage(500);
+		}
+		return true;
+	} catch (...) {
+		if (req != nullptr) {
+			req->sendErrorPage(500);
+		}
+		return true;
 	}
-	return false;
 }
 
 HttpServerMapper::HttpServerMapper() {
@@ -780,7 +808,7 @@ HttpServerMapper::HttpServerMapper() {
 bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 
 	if (!req->isValid()) return true;
-	std::string host (req->get("Host"));
+	std::string host (req->getHost());
 	std::string vpathbuff ( req->getURI());
 	std::string_view vpath(vpathbuff);
 	std::string_view prefix;
@@ -949,7 +977,7 @@ void HttpServer::buildLogMsg(std::ostream &stream, const HttpServerRequest &req)
 	stream.width(8);
 	stream << req.getMethod() << ' ';
 	stream.width(0);
-	stream << req.get("Host");
+	stream << req.getHost();
 	stream << req.getURI();
 	stream << std::endl;
 }
@@ -980,4 +1008,8 @@ void Logger::handler_log(const std::string_view &msg) noexcept {
 
 void Logger::log(ReqEvent event, const HttpServerRequest &req) noexcept {
 	owner.log(event, req);
+}
+
+Stream& HttpServerRequest::getStream() {
+	return stream;
 }
