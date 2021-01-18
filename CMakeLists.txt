@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 2.8) 
 
-add_library (miniserver 
+add_library (userver 
 	netaddr.cpp 
 	socket.cpp 
 	stream.cpp 
