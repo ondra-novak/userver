@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+namespace userver {
 
 ///just wraps network address
 class INetAddr {
@@ -86,6 +87,8 @@ inline int NetAddrBase<T>::listen() const {
 template<typename T>
 inline int NetAddrBase<T>::connect() const {
 	error(this,EINVAL, "Unsupported address");return 0;
+}
+
 }
 
 #endif /* SRC_MAIN_NETADDR_H_ */

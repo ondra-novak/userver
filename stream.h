@@ -13,6 +13,8 @@
 #include <mutex>
 #include "helpers.h"
 
+namespace userver {
+
 class Stream;
 
 class AbstractStream {
@@ -704,4 +706,5 @@ inline std::size_t LimitedStream<SS>::getOutputBufferSize() const {
 	return source.getOutputBufferSize();
 }
 
+}
 #endif /* SRC_MAIN_STREAM_H_ */

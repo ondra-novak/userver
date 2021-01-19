@@ -15,6 +15,9 @@
 
 #include "helpers.h"
 #include "socket_server.h"
+
+namespace userver {
+
 static std::string_view statusMessages[] = {
 		"100 Continue",
 		"101 Switching Protocols",
@@ -1026,4 +1029,6 @@ void Logger::log(ReqEvent event, const HttpServerRequest &req) noexcept {
 
 Stream& HttpServerRequest::getStream() {
 	return stream;
+}
+
 }

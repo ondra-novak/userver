@@ -18,6 +18,9 @@
 #include "async_provider.h"
 #include "async_resource.h"
 #include "netaddr.h"
+
+namespace userver {
+
 Socket::Socket() {}
 
 Socket::Socket(Socket &&other)
@@ -117,6 +120,7 @@ Socket::~Socket() {
 	if (s != -1) close(s);
 }
 
+
 bool Socket::timeouted() const {
 	return tm;
 }
@@ -173,4 +177,6 @@ void Socket::writeAsync(const void *buffer, unsigned int size, CallbackT<void(in
 			fn(r);
 		});
 	}
+}
+
 }

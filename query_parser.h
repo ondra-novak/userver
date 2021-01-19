@@ -6,6 +6,7 @@
 
 #include "header_value.h"
 
+namespace userver {
 
 class QueryParser{
 
@@ -41,7 +42,7 @@ protected:
 
 };
 
-
+}
 
 
 

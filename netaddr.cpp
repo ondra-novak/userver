@@ -20,6 +20,8 @@
 #include <sys/stat.h>
 #include <cerrno>
 
+namespace userver {
+
 std::string INetAddr::unknownToString(const sockaddr *sockaddr,
 		std::size_t slen) {
 
@@ -363,4 +365,5 @@ int NetAddrUnix::connect() const {
 
 }
 
+}
 

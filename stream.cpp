@@ -8,6 +8,9 @@
 #include "stream.h"
 
 #include "async_provider.h"
+
+namespace userver {
+
 std::string_view SocketStream::read() {
 	std::string_view out;
 	if (curbuff.empty()) {
@@ -147,4 +150,6 @@ void SocketStream::readAsync(CallbackT<void(const std::string_view &data)> &&fn)
 
 std::size_t SocketStream::getOutputBufferSize() const {
 	return wrbufflimit;
+}
+
 }

@@ -10,7 +10,7 @@
 
 #include <sstream>
 
-
+namespace userver {
 
 template<typename T>
 struct BuildQueryItem {
@@ -85,6 +85,6 @@ std::string buildQuery(const std::initializer_list<std::pair<std::string_view, s
 	return out.str();
 }
 
-
+}
 
 #endif /* SRC_USERVER_QUERY_BUILDER_H_ */

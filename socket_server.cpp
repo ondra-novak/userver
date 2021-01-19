@@ -17,6 +17,8 @@
 #include "async_provider.h"
 #include "async_resource.h"
 
+namespace userver {
+
 SocketServer::SocketServer(const NetAddrList &addrLst) {
 	fds.reserve(addrLst.size());
 	std::exception_ptr e;
@@ -167,4 +169,6 @@ inline void SocketServer::AsyncAcceptor::uncharge(int i) {
 
 inline void SocketServer::AsyncAcceptor::charge(int i) {
 	charged.push_back(i);
+}
+
 }

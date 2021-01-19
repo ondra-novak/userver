@@ -8,6 +8,7 @@
 #ifndef SRC_MINISERVER_ASYNC_RESOURCE_H_
 #define SRC_MINISERVER_ASYNC_RESOURCE_H_
 
+namespace userver {
 
 class AsyncResource {
 public:
@@ -23,5 +24,6 @@ public:
 
 };
 
+}
 
 #endif /* SRC_MINISERVER_ASYNC_RESOURCE_H_ */

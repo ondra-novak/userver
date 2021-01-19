@@ -10,6 +10,7 @@
 
 #include "helpers.h"
 
+namespace userver {
 
 class ISocket {
 public:
@@ -35,5 +36,6 @@ public:
 };
 
 
+}
 
 #endif /* SRC_MAIN_ISOCKET_H_ */

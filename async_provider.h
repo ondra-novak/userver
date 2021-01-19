@@ -14,6 +14,7 @@
 #ifndef SRC_MINISERVER_ASYNC_PROVIDER_H_
 #define SRC_MINISERVER_ASYNC_PROVIDER_H_
 
+namespace userver {
 
 class AsyncResource;
 
@@ -114,7 +115,10 @@ void setThreadAsyncProvider(AsyncProvider aprovider);
 
 AsyncProvider getCurrentAsyncProvider();
 
+}
+
 #endif /* SRC_MINISERVER_ASYNC_PROVIDER_H_ */
+
 
 
 

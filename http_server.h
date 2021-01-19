@@ -21,6 +21,8 @@
 #include "stream.h"
 #include "header_value.h"
 
+namespace userver {
+
 enum class ReqEvent {
 	init,
 	header_sent,
@@ -402,5 +404,6 @@ void HttpServerRequest::readBodyAsync2(Stream &s, std::vector<char> &buffer, std
 
 
 
+}
 
 #endif /* SRC_MAIN_HTTP_SERVER_H_ */

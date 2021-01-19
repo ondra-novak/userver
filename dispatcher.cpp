@@ -11,6 +11,8 @@
 #include <fcntl.h>
 #include <cerrno>
 
+namespace userver {
+
 Dispatcher::Dispatcher()
 :stopped(false)
 {
@@ -143,5 +145,7 @@ Dispatcher::Task Dispatcher::getTask() {
 Dispatcher::Reg::Reg(Callback &&cb, std::chrono::system_clock::time_point timeout)
 	:cb(std::move(cb)),timeout(timeout)
 {
+
+}
 
 }

@@ -14,6 +14,8 @@
 #include "async_resource.h"
 #include "dispatcher.h"
 
+namespace userver {
+
 class AsyncProviderImpl: public IAsyncProvider {
 public:
 
@@ -129,4 +131,6 @@ AsyncProvider getCurrentAsyncProvider() {
 	}
 	if (curThreadAsyncProvider == nullptr) throw std::runtime_error("No asynchronous provider is active");
 	return curThreadAsyncProvider;
+}
+
 }

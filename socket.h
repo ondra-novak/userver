@@ -8,6 +8,9 @@
 #ifndef SRC_MAIN_SOCKET_H_
 #define SRC_MAIN_SOCKET_H_
 #include "isocket.h"
+
+namespace userver {
+
 class NetAddr;
 
 class Socket: public ISocket {
@@ -42,8 +45,9 @@ protected:
 	int readtm=-1;
 	int writetm=-1;
 	bool tm = false;
-
-
 };
+
+}
+
 
 #endif /* SRC_MAIN_SOCKET_H_ */

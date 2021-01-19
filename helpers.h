@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <memory>
 
+namespace userver {
+
 template<typename U, typename T>
 T splitAt(const U &search, T &object) {
 	auto s = T(search);
@@ -89,5 +91,7 @@ protected:
 	std::unique_ptr<CBIfc> ptr;
 };
 
+}
 
 #endif /* SRC_MINISERVER_HELPERS_H_ */
+

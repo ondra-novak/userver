@@ -14,6 +14,8 @@
 #include "socket.h"
 #include "helpers.h"
 
+namespace userver {
+
 class SocketServer {
 public:
 	SocketServer(const NetAddrList &addrLst);
@@ -50,8 +52,8 @@ protected:
 	class AsyncAcceptor;
 	std::shared_ptr<AsyncAcceptor> asyncState;
 
-
-
 };
+
+}
 
 #endif /* SRC_MAIN_SOCKET_SERVER_H_ */

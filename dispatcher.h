@@ -13,6 +13,8 @@
 #include <functional>
 #include "helpers.h"
 
+namespace userver {
+
 class Dispatcher {
 public:
 
@@ -59,3 +61,5 @@ protected:
 	std::atomic_bool stopped;
 };
 
+
+}

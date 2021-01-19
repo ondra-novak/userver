@@ -8,6 +8,7 @@
 #ifndef SRC_USERVER_HEADER_VALUE_H_
 #define SRC_USERVER_HEADER_VALUE_H_
 
+namespace userver {
 
 class HeaderValue: public std::string_view {
 public:
@@ -18,4 +19,5 @@ public:
 };
 
 
+}
 #endif /* SRC_USERVER_HEADER_VALUE_H_ */

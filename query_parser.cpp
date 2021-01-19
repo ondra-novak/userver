@@ -3,7 +3,7 @@
 
 #include <algorithm>
 
-
+namespace userver {
 
 
 QueryParser::QueryParser(std::string_view vpath) {
@@ -171,4 +171,5 @@ bool QueryParser::orderItems(const Item& a, const Item& b) {
 	return a.first < b.first;
 }
 
+}
 
