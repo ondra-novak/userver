@@ -9,5 +9,6 @@ add_library (userver
 	dispatcher.cpp
 	async_provider.cpp
 	query_parser.cpp
+	dgramsocket.cpp
 )
 

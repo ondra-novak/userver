@@ -7,9 +7,10 @@
 
 #ifndef SRC_MAIN_NETADDR_H_
 #define SRC_MAIN_NETADDR_H_
-#include <sys/socket.h>
 #include <string>
 #include <vector>
+#include <memory>
+#include <sys/socket.h>
 
 namespace userver {
 
@@ -23,10 +24,13 @@ public:
 	virtual std::string toString(bool resolve = false) const = 0;
 	virtual int listen() const  = 0;
 	virtual int connect() const  = 0;
+	virtual int bindUDP() const = 0;
 	virtual std::unique_ptr<INetAddr> clone() const = 0;
 
 
 	static std::string unknownToString(const sockaddr *sockaddr, std::size_t slen);
+	static void error(const INetAddr *addr, int errnr, const char *desc);
+	static void error(const std::string_view &addr, int errnr, const char *desc);
 };
 
 template<typename T>
@@ -38,6 +42,7 @@ public:
 	virtual const sockaddr *getAddr() const override  {return reinterpret_cast<const struct sockaddr *>(&addr);}
 	virtual int listen() const  override;
 	virtual int connect() const  override;
+	virtual int bindUDP() const  override;
 	virtual std::string toString(bool resolve = false) const {
 		return unknownToString(getAddr(), getAddrLen());
 	}
@@ -73,6 +78,7 @@ public:
 	std::string toString(bool resolve) const {return addr->toString(resolve);}
 	int listen() const  {return addr->listen();}
 	int connect() const  {return addr->connect();}
+	int bindUDP() const  {return addr->bindUDP();}
 
 protected:
 	PNetAddr addr;
@@ -89,6 +95,12 @@ inline int NetAddrBase<T>::connect() const {
 	error(this,EINVAL, "Unsupported address");return 0;
 }
 
+template<typename T>
+inline int NetAddrBase<T>::bindUDP() const {
+	error(this,EINVAL, "Unsupported address");return 0;
 }
+
+}
+
 
 #endif /* SRC_MAIN_NETADDR_H_ */

@@ -43,6 +43,7 @@ public:
 	virtual std::string toString(bool resolve = false) const override;
 	virtual int listen() const override;
 	virtual int connect() const override;
+	virtual int bindUDP() const override;
 	virtual std::unique_ptr<INetAddr> clone() const override {
 		return std::make_unique<NetAddrIPv4>(addr);
 	}
@@ -56,6 +57,7 @@ public:
 	virtual std::string toString(bool resolve = false) const override;
 	virtual int listen() const override;
 	virtual int connect() const override;
+	virtual int bindUDP() const override;
 	virtual std::unique_ptr<INetAddr> clone() const override {
 		return std::make_unique<NetAddrIPv6>(addr);
 	}
@@ -70,6 +72,7 @@ public:
 	virtual std::string toString(bool resolve = false) const override;
 	virtual int listen() const override;
 	virtual int connect() const override;
+	virtual int bindUDP() const override;
 	virtual std::unique_ptr<INetAddr> clone() const override {
 		return std::make_unique<NetAddrUnix>(addr);
 	}
@@ -77,13 +80,13 @@ protected:
 	int permission;
 
 };
-static void error(const std::string_view &addr, int errnr, const char *desc) {
+void INetAddr::error(const std::string_view &addr, int errnr, const char *desc) {
 	std::ostringstream bld;
 	bld<<"Network error: " << strerror(errnr) << " - " << desc << " - " << addr;
 	throw std::system_error(errnr, std::generic_category(), bld.str());
 }
 
-static void error(const INetAddr *addr, int errnr, const char *desc) {
+void INetAddr::error(const INetAddr *addr, int errnr, const char *desc) {
 	error(addr->toString(true), errnr, desc);
 }
 
@@ -92,16 +95,16 @@ NetAddrList NetAddr::fromString(const std::string_view &addr_str, const std::str
 	std::string name;
 	std::string svc;
 
-	if (addr_str.empty()) error(addr_str, EINVAL, "Address can't be empty");
+	if (addr_str.empty()) INetAddr::error(addr_str, EINVAL, "Address can't be empty");
 	if (addr_str[0]=='[' ) {
 		auto pos = addr_str.find(']');
-		if (pos == addr_str.npos) error(addr_str, EINVAL, "Parse error/invalid address");
+		if (pos == addr_str.npos) INetAddr::error(addr_str, EINVAL, "Parse error/invalid address");
 		auto ipv6part = addr_str.substr(1,pos-1);
 		if (pos+1 == addr_str.length()) {
 			name = ipv6part;
 			svc = default_svc;
 		} else {
-			if (addr_str[pos+1] != ':') error(addr_str, EINVAL, "Parse error/invalid address or port");
+			if (addr_str[pos+1] != ':') INetAddr::error(addr_str, EINVAL, "Parse error/invalid address or port");
 			name = ipv6part;
 			svc = addr_str.substr(pos+1);
 		}
@@ -124,7 +127,7 @@ NetAddrList NetAddr::fromString(const std::string_view &addr_str, const std::str
 
 	auto res =getaddrinfo(name.empty()?nullptr:name.c_str(), svc.c_str(), &req, &resp);
 	if (res) {
-		error(addr_str, ENOENT, gai_strerror(res));
+		INetAddr::error(addr_str, ENOENT, gai_strerror(res));
 	}
 
 	NetAddrList lst;
@@ -283,7 +286,8 @@ int NetAddrIPv6::connect() const {
 static sockaddr_un createUnAddress(const std::string_view &addr) {
 	sockaddr_un s;
 	s.sun_family = AF_UNIX;
-	if (addr.length() >= sizeof(s.sun_path)-1) error(addr, EINVAL, "Socket path is too long.");
+	if (addr.length() >= sizeof(s.sun_path)-1)
+		INetAddr::error(addr, EINVAL, "Socket path is too long.");
 	char *c = s.sun_path;
 	for (char x: addr) *c++ = x;
 	*c = 0;
@@ -363,6 +367,39 @@ int NetAddrUnix::connect() const {
 		throw;
 	}
 
+}
+
+inline int NetAddrIPv4::bindUDP() const {
+	int sock = ::socket(AF_INET, SOCK_DGRAM|SOCK_NONBLOCK|SOCK_CLOEXEC, IPPROTO_UDP);
+	if (sock < 0) error(this, errno, "socket()");
+	try {
+		if (::bind(sock,getAddr(), getAddrLen())) {
+			error(this, errno, "bind()");
+		}
+		return sock;
+	} catch (...) {
+		::close(sock);
+		throw;
+	}
+}
+
+inline int NetAddrUnix::bindUDP() const {
+	error(this, errno, "Cannot use this address");
+	throw;
+}
+
+inline int NetAddrIPv6::bindUDP() const {
+	int sock = ::socket(AF_INET6, SOCK_DGRAM|SOCK_NONBLOCK|SOCK_CLOEXEC, IPPROTO_UDP);
+	if (sock < 0) error(this, errno, "socket()");
+	try {
+		if (::bind(sock,getAddr(), getAddrLen())) {
+			error(this, errno, "bind()");
+		}
+		return sock;
+	} catch (...) {
+		::close(sock);
+		throw;
+	}
 }
 
 }
