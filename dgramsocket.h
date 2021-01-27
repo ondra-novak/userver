@@ -1,4 +1,4 @@
-/*
+/*prim
  * udpsocket.h
  *
  *  Created on: 19. 1. 2021

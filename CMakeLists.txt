@@ -7,6 +7,7 @@ add_library (userver
 	socket_server.cpp 
 	http_server.cpp
 	dispatcher.cpp
+	dispatcher_epoll.cpp
 	async_provider.cpp
 	query_parser.cpp
 	dgramsocket.cpp

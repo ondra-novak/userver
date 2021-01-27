@@ -11,34 +11,22 @@
 #include <mutex>
 #include <vector>
 #include <functional>
-#include "helpers.h"
+#include "idispatcher.h"
 
 namespace userver {
 
-class Dispatcher {
+class Dispatcher: public IDispatcher {
 public:
 
-	using Callback = CallbackT<void(bool)>;
 
 	Dispatcher();
 	~Dispatcher();
 
-	void waitRead(int socket, Callback &&cb, std::chrono::system_clock::time_point timeout);
-	void waitWrite(int socket, Callback &&cb, std::chrono::system_clock::time_point timeout);
-	void execAsync(Callback &&cb);
-
-	struct Task {
-		Callback cb;
-		bool timeouted;
-
-		Task(Callback &&cb, bool timeouted):cb(std::move(cb)), timeouted(timeouted) {}
-		Task():cb(nullptr),timeouted(false) {}
-
-		bool valid() const {return cb != nullptr;}
-	};
-
-	Task getTask();
-	void stop();
+	virtual void waitRead(int socket, Callback &&cb, std::chrono::system_clock::time_point timeout) override;
+	virtual void waitWrite(int socket, Callback &&cb, std::chrono::system_clock::time_point timeout) override;
+	virtual void execAsync(Callback &&cb) override;
+	virtual Task getTask() override;
+	virtual void stop() override;
 
 protected:
 

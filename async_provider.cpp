@@ -13,13 +13,16 @@
 
 #include "async_resource.h"
 #include "dispatcher.h"
+#include "dispatcher_epoll.h"
 
 namespace userver {
 
 class AsyncProviderImpl: public IAsyncProvider {
 public:
 
-	AsyncProviderImpl(unsigned int dispcnt);
+	using Factory = std::unique_ptr<IDispatcher> (*)();
+
+	AsyncProviderImpl(unsigned int dispcnt, Factory factory);
 	virtual void stop();
 	virtual void runAsync(const AsyncResource &res,
 			IAsyncProvider::Callback &&cb,
@@ -28,9 +31,9 @@ public:
 	virtual void runAsync(IAsyncProvider::Callback &&cb);
 
 protected:
-	using PDispatch = std::unique_ptr<Dispatcher>;
+	using PDispatch = std::unique_ptr<IDispatcher>;
 	std::queue<PDispatch> dispatchers;
-	std::queue<Dispatcher *> dispqueue;
+	std::queue<IDispatcher *> dispqueue;
 	std::mutex lock;
 	std::condition_variable wt;
 
@@ -38,8 +41,18 @@ protected:
 
 };
 
-AsyncProvider createAsyncProvider(unsigned int dispatchers) {
-	return std::make_shared<AsyncProviderImpl>(dispatchers);
+static std::unique_ptr<IDispatcher> createDispatcher() {return std::make_unique<Dispatcher>();};
+static std::unique_ptr<IDispatcher> createDispatcher_epoll() {return std::make_unique<Dispatcher_EPoll>();};
+
+
+AsyncProvider createAsyncProvider(unsigned int dispatchers, AsyncProviderType type) {
+	AsyncProviderImpl::Factory f;
+	switch (type) {
+	default:
+	case AsyncProviderType::poll: f = &createDispatcher;break;
+	case AsyncProviderType::epoll: f = &createDispatcher_epoll;break;
+	}
+	return std::make_shared<AsyncProviderImpl>(dispatchers, f);
 }
 
 inline void AsyncProviderImpl::stop() {
@@ -67,7 +80,7 @@ inline void AsyncProviderImpl::runAsync(const AsyncResource &res,
 }
 
 inline bool AsyncProviderImpl::yield() {
-	Dispatcher *selDisp;
+	IDispatcher *selDisp;
 	std::unique_lock _(lock);
 	wt.wait(_,[&]{
 		return !dispqueue.empty();
@@ -95,9 +108,9 @@ inline bool AsyncProviderImpl::yield() {
 	}
 }
 
-inline AsyncProviderImpl::AsyncProviderImpl(unsigned int dispcnt) {
+inline AsyncProviderImpl::AsyncProviderImpl(unsigned int dispcnt, Factory factory) {
 	for (decltype(dispcnt) i = 0; i < dispcnt; i++) {
-		auto d = std::make_unique<Dispatcher>();
+		auto d = factory();
 		dispqueue.push(d.get());
 		dispatchers.push(std::move(d));
 	}

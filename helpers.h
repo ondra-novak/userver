@@ -91,6 +91,43 @@ protected:
 	std::unique_ptr<CBIfc> ptr;
 };
 
+template<typename T, std::size_t n>
+class SmallVector {
+public:
+	SmallVector ():_size(0) {}
+	bool empty() const {return _size == 0;}
+	std::size_t size() const {return _size;}
+	void push_back(T &&item) {
+		if (_size >= n) throw std::runtime_error("SmallVector: No room to store item");
+		new(getItemPtr(_size)) T(std::move(item));
+		_size++;
+	}
+	T *begin() {return getItemPtr(0);}
+	T *end() {return getItemPtr(_size);}
+	const T *begin()  const {return getItemPtr(0);}
+	const T *end() const {return getItemPtr(_size);}
+	void erase(const T *where) {
+		std::size_t idx = where - getItemPtr(0);
+		getItemPtr(idx)->~T();
+		auto idx1 = idx+1;
+		while (idx1 < _size) {
+			T *nxt = getItemPtr(idx1);
+			new (getItemPtr(idx)) T(std::move(*nxt));
+			nxt->~T();
+			idx = idx1;
+			idx1 = idx+1;
+		}
+		_size--;
+	}
+
+protected:
+	std::size_t _size;
+	unsigned char _data[sizeof(T)*n];
+	T *getItemPtr(std::size_t pos) {return reinterpret_cast<T *>(_data)+pos;}
+	const T *getItemPtr(std::size_t pos) const {return reinterpret_cast<const T *>(_data)+pos;}
+
+};
+
 }
 
 #endif /* SRC_MINISERVER_HELPERS_H_ */

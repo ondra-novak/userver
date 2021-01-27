@@ -100,6 +100,11 @@ public:
 	}
 };
 
+enum class AsyncProviderType {
+	poll,
+	epoll
+};
+
 ///Create asynchronous provider with specified dispatchers
 /**
  * @param dispatchers count of active dispatchers. You will need at least this count of threads.
@@ -107,7 +112,7 @@ public:
  *
  * @note you need to create thread and call start_thread for each thread.
  */
-AsyncProvider createAsyncProvider(unsigned int dispatchers = 1);
+AsyncProvider createAsyncProvider(unsigned int dispatchers = 1, AsyncProviderType type = AsyncProviderType::epoll);
 
 void setCurrentAsyncProvider(AsyncProvider aprovider);
 
