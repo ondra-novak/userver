@@ -108,7 +108,7 @@ std::size_t HeaderValue::getUInt() const {
 	return n;
 }
 
-static bool lessHeader(const std::pair<std::string_view, std::string_view> &a,
+bool HeaderValue::lessHeader(const std::pair<std::string_view, std::string_view> &a,
 				const std::pair<std::string_view, std::string_view> &b) {
 	auto ln = std::min(a.first.length(), b.first.length());
 	for (std::size_t i = 0; i < ln; i++) {
@@ -118,7 +118,7 @@ static bool lessHeader(const std::pair<std::string_view, std::string_view> &a,
 	return (static_cast<int>(a.first.length()) - static_cast<int>(b.first.length())) < 0;
 }
 
-static bool iequal(const std::string_view &a, const std::string_view &b) {
+bool HeaderValue::iequal(const std::string_view &a, const std::string_view &b) {
 	if (a.length() != b.length()) return false;
 	auto ln = a.length();
 	for (std::size_t i = 0; i < ln; i++) {
@@ -222,8 +222,8 @@ bool HttpServerRequest::parse() {
 
 HeaderValue HttpServerRequest::get(const std::string_view &item) const {
 	std::pair srch(item, std::string_view());
-	auto iter =std::lower_bound(inHeader.begin(), inHeader.end(), srch, lessHeader);
-	if (iter == inHeader.end() || lessHeader(srch, *iter)) return HeaderValue();
+	auto iter =std::lower_bound(inHeader.begin(), inHeader.end(), srch, HeaderValue::lessHeader);
+	if (iter == inHeader.end() || HeaderValue::lessHeader(srch, *iter)) return HeaderValue();
 	else return HeaderValue(std::string_view(iter->second));
 }
 
@@ -262,10 +262,6 @@ bool HttpServerRequest::parseFirstLine(std::string_view &v) {
 	return true;
 }
 
-static void trim(std::string_view &x) {
-	while (!x.empty() && std::isspace(x[0])) x = x.substr(1);
-	while (!x.empty() && std::isspace(x[x.length()-1])) x = x.substr(0, x.length()-1);
-}
 
 HttpServerRequest::HttpServerRequest()
 {
@@ -389,7 +385,7 @@ bool HttpServerRequest::processHeaders() {
 	}
 	auto expect = get("Expect");
 	if (expect.defined) {
-		if (!iequal(expect ,"100-continue")) {
+		if (!HeaderValue::iequal(expect ,"100-continue")) {
 			sendErrorPage(417);
 			return false;
 		} else {
@@ -402,30 +398,30 @@ bool HttpServerRequest::processHeaders() {
 
 
 void HttpServerRequest::set(const std::string_view &key, const std::string_view &value) {
-	if (iequal(key, CONTENT_TYPE)) {
+	if (HeaderValue::iequal(key, CONTENT_TYPE)) {
 		has_content_type = true;
 	}
-	else if (iequal(key, CONTENT_LENGTH)) {
+	else if (HeaderValue::iequal(key, CONTENT_LENGTH)) {
 		has_content_length = true;
 		HeaderValue hv(value);
 		send_content_length = hv.getUInt();
 	}
-	else if (iequal(key, DATE)) {
+	else if (HeaderValue::iequal(key, DATE)) {
 		has_date = true;
 	}
-	else if (iequal(key, TRANSFER_ENCODING)) {
+	else if (HeaderValue::iequal(key, TRANSFER_ENCODING)) {
 		has_transfer_encoding = true;
-		if (iequal(value,TE_CHUNKED)) {
+		if (HeaderValue::iequal(value,TE_CHUNKED)) {
 			has_transfer_encoding_chunked = true;
 		}
 	}
-	else if (iequal(key, CONNECTION)) {
+	else if (HeaderValue::iequal(key, CONNECTION)) {
 		has_connection = true;
-		if (iequal(value, CONN_CLOSE)) enableKeepAlive = false;
-	} else if (iequal(key, "Last-Modified") || iequal(key, "ETag")) {
+		if (HeaderValue::iequal(value, CONN_CLOSE)) enableKeepAlive = false;
+	} else if (HeaderValue::iequal(key, "Last-Modified") || HeaderValue::iequal(key, "ETag")) {
 		has_last_modified = true;
 	}
-	else if (iequal(key, "Server")) {
+	else if (HeaderValue::iequal(key, "Server")) {
 		has_server = true;
 	}
 
@@ -609,7 +605,7 @@ bool HttpServerRequest::parseHeaders(std::string_view &dt) {
 		trim(value);
 		inHeader.push_back(std::pair(key,value));
 	}
-	std::sort(inHeader.begin(), inHeader.end(), lessHeader);
+	std::sort(inHeader.begin(), inHeader.end(), HeaderValue::lessHeader);
 	return true;
 }
 

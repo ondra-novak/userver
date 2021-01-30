@@ -6,6 +6,7 @@ add_library (userver
 	stream.cpp 
 	socket_server.cpp 
 	http_server.cpp
+	http_client.cpp
 	dispatcher.cpp
 	dispatcher_epoll.cpp
 	async_provider.cpp

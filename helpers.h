@@ -128,6 +128,12 @@ protected:
 
 };
 
+inline void trim(std::string_view &x) {
+	while (!x.empty() && std::isspace(x[0])) x = x.substr(1);
+	while (!x.empty() && std::isspace(x[x.length()-1])) x = x.substr(0, x.length()-1);
+}
+
+
 }
 
 #endif /* SRC_MINISERVER_HELPERS_H_ */
