@@ -175,6 +175,41 @@ protected:
 	void finish_headers_excpect_100();
 };
 
+class IHttpClientConnectFactory {
+public:
+
+	struct ConnectInfo {
+		/**
+		 * Key - keep alive connections are stored under keys. This key identifies
+		 * the connection which can be reused to send aditional request
+		 */
+		std::string key;
+		///Path for the request - extracted from the url
+		std::string path;
+		///Host field
+		std::string host;
+		///Authorization, if present, otherwise empty
+		std::string auth;
+		///Any arbirtrary data, which factory need for connect
+		std::string internal;
+	};
+
+	virtual ConnectInfo parseURL(const std::string_view &url) = 0;
+	///Called for connect and create stream
+	/**
+	 *
+	 * @param cinfo
+	 * @return
+	 */
+	virtual std::unique_ptr<ISocket> connect(const ConnectInfo &cinfo) = 0;
+
+
+
+};
+
+class HttpClient {
+public:
+};
 
 }
 

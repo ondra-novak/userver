@@ -65,6 +65,7 @@ protected:
 
 
 	int epoll_fd;
+	int event_fd;
 	int pipe_wr;
 	int pipe_rd;
 	std::mutex lock;

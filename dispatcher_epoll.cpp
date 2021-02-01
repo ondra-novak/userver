@@ -11,6 +11,8 @@
 #include <sys/epoll.h>
 #include "dispatcher_epoll.h"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
 namespace userver {
 
 
@@ -22,31 +24,20 @@ Dispatcher_EPoll::Dispatcher_EPoll() {
 		int e = errno;
 		throw std::system_error(e,std::generic_category(), "epoll_create1");
 	}
-	int fds[2];
-	if (::pipe2(fds, O_CLOEXEC|O_NONBLOCK)<0) {
+
+	int fd[2];
+	int r = pipe2(fd, O_CLOEXEC);
+	if (r <0)  {
 		int e = errno;
 		::close(epoll_fd);
-		throw std::system_error(e, std::generic_category(), "pipe2");
+		throw std::system_error(e,std::generic_category(), "socket/notify");
 	}
-	pipe_rd = fds[0];
-	pipe_wr = fds[1];
-
-	epoll_event ev = {};
-	ev.events = EPOLLIN;
-	ev.data.fd = pipe_rd;
-	if (::epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pipe_rd, &ev)<0) {
-		int e = errno;
-		::close(epoll_fd);
-		::close(pipe_rd);
-		::close(pipe_wr);
-		throw std::system_error(e, std::generic_category(), "epoll_ctl");
-	}
-
+	event_fd=fd[0];
+	::close(fd[1]);
 }
 
 Dispatcher_EPoll::~Dispatcher_EPoll() {
-	::close(pipe_rd);
-	::close(pipe_wr);
+	::close(event_fd);
 	::close(epoll_fd);
 }
 
@@ -86,17 +77,26 @@ void Dispatcher_EPoll::regWait(int socket, Op op, Callback &&cb, std::chrono::sy
 		timeout, op, std::move(cb)
 	});
 	rearm_fd(first, socket, lst);
+	notify();
 }
 
 void Dispatcher_EPoll::notify() {
-	char b = 1;
-	if (!::write(pipe_wr, &b, 1)) {
+	epoll_event ev ={};
+	ev.events = EPOLLIN|EPOLLONESHOT;
+	ev.data.fd = event_fd;
+	int r = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, event_fd, &ev);
+	if (r < 0) {
 		int e = errno;
-		if (e != EWOULDBLOCK) {
-			throw std::system_error(e, std::generic_category());
+		if (e == ENOENT) {
+			r = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, event_fd, &ev);
+			if (r < 0) {
+				int e = errno;
+				throw std::system_error(e, std::generic_category(), "notify()");
+			}
+		} else {
+			throw std::system_error(e, std::generic_category(), "notify_mod()");
 		}
 	}
-
 }
 
 Dispatcher_EPoll::Task Dispatcher_EPoll::getTask() {
@@ -141,7 +141,7 @@ Dispatcher_EPoll::Task Dispatcher_EPoll::getTask() {
 			}
 		} else {
 			int fd = ev.data.fd;
-			if (fd != pipe_rd) {
+			if (fd != event_fd) {
 				RegList &regs = fd_map[fd];
 
 				Op op;
@@ -160,11 +160,6 @@ Dispatcher_EPoll::Task Dispatcher_EPoll::getTask() {
 					regs.erase(iter);
 					rearm_fd(false, fd, regs);
 					return tsk;
-				}
-			} else {
-				char buff[100];
-				if (::read(fd, buff, 100)<0) {
-					throw std::system_error(errno, std::generic_category());
 				}
 			}
 		}
@@ -211,7 +206,10 @@ int Dispatcher_EPoll::getWaitTime() const {
 	auto iter = tm_map.begin();
 	if (iter == tm_map.end()) return -1;
 	auto tm = iter->first;
-	return std::chrono::duration_cast<std::chrono::milliseconds>(tm - now).count();
+	auto dist = std::chrono::duration_cast<std::chrono::milliseconds>(tm - now).count();
+	if (dist <0) dist = 0;
+	return dist;
+
 }
 
 int Dispatcher_EPoll::getTmFd() const {
