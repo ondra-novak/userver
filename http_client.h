@@ -38,7 +38,7 @@ public:
 	 * @note You can reuse existing request when it was processed, to open new request. However
 	 * you need ensure, that previous request has been fully processed
 	 */
-	void open(const std::string_view &method, const std::string &host, const std::string_view &path);
+	void open(const std::string_view &method, const std::string_view &host, const std::string_view &path);
 	///Add header
 	/**
 	 * Adds header. Note the function is stupid, it doesn't check current request state. You can
@@ -141,7 +141,7 @@ public:
 	///Retrieves response header
 	HeaderValue get(const std::string_view &key) const;
 	///Retrieves stream to response
-	Stream &getRespone();
+	Stream &getResponse();
 
 	using HeaderMap = std::vector<std::pair<std::string_view, std::string_view> >;
 	using iterator = HeaderMap::const_iterator;
@@ -152,11 +152,15 @@ public:
 	HeaderMap &getHeaders();
 
 
+	///Returns host of current opened request
+	const std::string &getHost() const {return host;}
+
 protected:
 
 	void addHeaderInternal(const std::string_view &key, const std::string_view &value);
 
 	Stream s;
+	std::string host;
 	bool has_te = false;
 	bool has_te_chunked = false;
 	bool header_sent = false;
@@ -169,46 +173,101 @@ protected:
 	HeaderMap responseHeaders;
 	int status;
 
-	void finish_headers();
+	void finish_headers(bool message);
 	void prepareUserStream();
 	bool parseResponse();
 	void finish_headers_excpect_100();
 };
 
-class IHttpClientConnectFactory {
-public:
 
-	struct ConnectInfo {
-		/**
-		 * Key - keep alive connections are stored under keys. This key identifies
-		 * the connection which can be reused to send aditional request
-		 */
-		std::string key;
-		///Path for the request - extracted from the url
-		std::string path;
-		///Host field
-		std::string host;
-		///Authorization, if present, otherwise empty
-		std::string auth;
-		///Any arbirtrary data, which factory need for connect
-		std::string internal;
-	};
+struct HttpClientCfg {
 
-	virtual ConnectInfo parseURL(const std::string_view &url) = 0;
-	///Called for connect and create stream
-	/**
-	 *
-	 * @param cinfo
-	 * @return
-	 */
-	virtual std::unique_ptr<ISocket> connect(const ConnectInfo &cinfo) = 0;
+	using PSocket = std::unique_ptr<ISocket>;
 
-
-
+	std::string userAgent;
+	int connectTimeout = 30000;
+	CallbackT<PSocket(const NetAddr &, const std::string_view &host)> connect;
+	CallbackT<PSocket(const NetAddr &, const std::string_view &host)> sslConnect;
+	CallbackT<NetAddr(const std::string_view &)> resolve;
 };
 
 class HttpClient {
 public:
+
+	using URL = std::string_view;
+	using Data = std::string_view;
+	using Method = std::string_view;
+	using Callback = CallbackT<void(std::unique_ptr<HttpClientRequest> &&)>;
+
+
+	HttpClient(HttpClientCfg &&cfg);
+
+
+	///Open new request
+	/**
+	 * @param method method
+	 * @param url url
+	 * @return connected request. If result is null, then connection cannot be established
+	 */
+	std::unique_ptr<HttpClientRequest> open(const URL &method,
+											const Method &url);
+
+	///Open request asynchronously
+	/**
+	 * @param method method
+	 * @param url url
+	 * @param callback function called, when request is ready. The argument contains
+	 * connected request. If the argument is null, then connection cannot be established
+	 */
+	void open(const URL &method, const Method &url, Callback &&callback);
+
+	using HeaderPair = std::pair<std::string_view, std::string_view>;
+
+	class HeaderList {
+	public:
+		HeaderList(const std::initializer_list<HeaderPair> &lst);
+		HeaderList(const std::vector<HeaderPair> &lst);
+		HeaderList(const HeaderPair *lst, std::size_t count);
+
+		const HeaderPair &operator[](int index) const {return ptr[index];}
+		const HeaderPair *begin() const {return ptr;}
+		const HeaderPair *end() const {return ptr+count;}
+
+	protected:
+		const HeaderPair *ptr;
+		std::size_t count;
+	};
+
+
+	std::unique_ptr<HttpClientRequest> GET(const URL &url, HeaderList headers);
+	std::unique_ptr<HttpClientRequest> POST(const URL &url, HeaderList headers, const Data &data);
+	std::unique_ptr<HttpClientRequest> PUT(const URL &url, HeaderList &headers, const Data &data);
+	std::unique_ptr<HttpClientRequest> DELETE(const URL &url, HeaderList headers, const Data &data);
+	std::unique_ptr<HttpClientRequest> DELETE(const URL &url, HeaderList headers);
+
+
+
+protected:
+	HttpClientCfg cfg;
+
+	struct CrackedURL {
+		bool valid = false;
+		bool ssl = false;
+		int port = 80;
+		std::string_view host;
+		std::string_view path;
+		std::string_view auth;
+		std::string_view domain;
+	};
+
+	CrackedURL crackUrl(const std::string_view &url);
+	NetAddr resolve(const CrackedURL &cu);
+	std::unique_ptr<ISocket> connect(const NetAddr &addr, const CrackedURL &cu);
+
+	std::unique_ptr<HttpClientRequest> sendRequest(const Method &method, const URL &url, HeaderList headers);
+	std::unique_ptr<HttpClientRequest> sendRequest(const Method &method, const URL &url, HeaderList headers, const Data &data);
+
+
 };
 
 }

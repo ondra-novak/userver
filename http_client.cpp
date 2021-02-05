@@ -7,12 +7,14 @@
 
 #include "http_client.h"
 
+#include "async_provider.h"
+#include "netaddr.h"
 namespace userver {
 
 HttpClientRequest::HttpClientRequest(Stream &&s)
 		:s(std::move(s)) {}
 
-void HttpClientRequest::open(const std::string_view &method, const std::string &host, const std::string_view &path) {
+void HttpClientRequest::open(const std::string_view &method, const std::string_view &host, const std::string_view &path) {
 	send_ctx_len.reset();
 	userStream.reset();
 	has_te = false;
@@ -24,6 +26,7 @@ void HttpClientRequest::open(const std::string_view &method, const std::string &
 	s.writeNB(" HTTP/1.1\r\n");
 	addHeader("Host",host);
 	head_method = HeaderValue::iequal(method, "HEAD");
+	this->host = host;
 }
 
 void HttpClientRequest::addHeaderInternal(const std::string_view &key,
@@ -77,7 +80,7 @@ void HttpClientRequest::setContentType(const std::string_view &ctx) {
 
 Stream& HttpClientRequest::beginBody() {
 	if (!header_sent) {
-		finish_headers();
+		finish_headers(true);
 	}
 	if (has_te) {
 		if (has_te_chunked) {
@@ -95,7 +98,7 @@ Stream& HttpClientRequest::beginBody() {
 }
 
 int HttpClientRequest::send() {
-	if (!header_sent) finish_headers();
+	if (!header_sent) finish_headers(false);
 	userStream.reset();
 	s.flush();
 	if (s.getLine(responseBuffer, "\r\n\r\n") && parseResponse()) {
@@ -106,8 +109,8 @@ int HttpClientRequest::send() {
 	return status;
 }
 
-void HttpClientRequest::finish_headers() {
-	if (!has_te && !send_ctx_len.has_value()) {
+void HttpClientRequest::finish_headers(bool message) {
+	if (message && !has_te && !send_ctx_len.has_value()) {
 		addHeader("Transfer-Encoding","chunked");
 	}
 	s.writeNB("\r\n");
@@ -134,7 +137,7 @@ void HttpClientRequest::prepareUserStream() {
 }
 
 void HttpClientRequest::sendAsync(CallbackT<void(int)> &&cb) {
-	if (!header_sent) finish_headers();
+	if (!header_sent) finish_headers(true);
 	userStream.reset();
 	s.flushAsync([this, cb = std::move(cb)](bool error) mutable {
 		if (error) {
@@ -158,7 +161,7 @@ void HttpClientRequest::sendAsync(CallbackT<void(int)> &&cb) {
 	});
 }
 
-Stream& HttpClientRequest::getRespone() {
+Stream& HttpClientRequest::getResponse() {
 	return *userStream;
 }
 
@@ -190,7 +193,7 @@ std::string_view HttpClientRequest::getProtocol() {
 
 void HttpClientRequest::finish_headers_excpect_100() {
 	addHeader("Expect", "100-continue");
-	finish_headers();
+	finish_headers(true);
 }
 
 int HttpClientRequest::requestContinue() {
@@ -241,6 +244,185 @@ bool HttpClientRequest::parseResponse() {
 	}
 }
 
+NetAddr HttpClient::resolve(const CrackedURL &cu) {
+	NetAddr addr(NetAddr::PNetAddr(nullptr));
+	if (cfg.resolve != nullptr)  {
+		return cfg.resolve(cu.domain);
+	} else {
+		auto lst = NetAddr::fromString(cu.host, std::to_string(cu.port));
+		if (lst.empty()) throw std::runtime_error("HttpClient::open - can't resolve domain");
+		return std::move(lst[0]);
+	}
+}
+
+std::unique_ptr<HttpClientRequest> HttpClient::GET(const URL &url, HeaderList headers) {
+	return sendRequest("GET", url, headers);
+}
+
+std::unique_ptr<HttpClientRequest> HttpClient::POST(const URL &url,
+		HeaderList headers, const Data &data) {
+	return sendRequest("POST", url, headers, data);
 
 }
 
+std::unique_ptr<HttpClientRequest> HttpClient::PUT(const URL &url,
+		HeaderList &headers, const Data &data) {
+	return sendRequest("PUT", url, headers, data);
+}
+
+std::unique_ptr<HttpClientRequest> HttpClient::DELETE(const URL &url,
+		HeaderList headers, const Data &data) {
+	return sendRequest("DELETE", url, headers, data);
+
+}
+
+std::unique_ptr<HttpClientRequest> HttpClient::DELETE(const URL &url,
+		HeaderList headers) {
+	return sendRequest("DELETE", url, headers);
+}
+
+std::unique_ptr<ISocket> HttpClient::connect(const NetAddr &addr, const CrackedURL &cu) {
+	if (cu.ssl) {
+		if (cfg.sslConnect == nullptr) throw std::runtime_error("SSL is not available");
+		return cfg.sslConnect(addr, cu.host);
+	} else {
+		if (cfg.connect != nullptr) {
+			return cfg.connect(addr, cu.host);
+		}
+		else {
+			return std::make_unique<Socket>(Socket::connect(addr));
+		}
+	}
+}
+std::unique_ptr<HttpClientRequest> HttpClient::open(const Method &method, const URL &url) {
+
+	auto cu = crackUrl(url);
+	if (!cu.valid) return nullptr;
+	NetAddr addr = resolve(cu);
+	auto socket = connect(addr,cu);
+	bool resp = socket->waitConnect(cfg.connectTimeout);
+	if (resp == false) return nullptr;
+
+	Stream stream(new SocketStream(std::move(socket)));
+	auto req = std::make_unique<HttpClientRequest>(std::move(stream));
+	req->open(method, cu.host, cu.path);
+	req->addHeader("UserAgent", cfg.userAgent);
+	return req;
+}
+
+struct Clousure {
+	std::string method;
+	std::string url;
+	CallbackT<void(std::unique_ptr<HttpClientRequest> &&)> cb;
+};
+
+
+void HttpClient::open(const Method &method, const URL &url,Callback  &&callback) {
+
+
+	getCurrentAsyncProvider().runAsync([this,
+										clousure = std::make_unique<Clousure>(Clousure{
+												std::string(method),
+												std::string(url),
+												std::move(callback)
+										})] () mutable {
+
+		auto cu = crackUrl(clousure->url);
+		if (!cu.valid) clousure->cb(nullptr);
+		NetAddr addr = resolve(cu);
+		auto socket = connect(addr,cu);
+		auto s = socket.get();
+		s->waitConnect(cfg.connectTimeout,[this, cu,socket = std::move(socket), clousure=std::move(clousure)](bool ok)mutable{
+			Stream stream(new SocketStream(std::move(socket)));
+			auto req = std::make_unique<HttpClientRequest>(std::move(stream));
+			req->open(clousure->method, cu.host, cu.path);
+			req->addHeader("UserAgent", cfg.userAgent);
+			clousure->cb(std::move(req));
+		});
+	});
+
+}
+
+HttpClient::CrackedURL HttpClient::crackUrl(const std::string_view &url) {
+
+	std::string_view rest;
+	CrackedURL cu;
+	if (HeaderValue::iequal(url.substr(0,7), "http://")) {
+		rest = url.substr(7);
+	} else if (HeaderValue::iequal(url.substr(0,7), "https://")) {
+		cu.ssl = true;
+		rest = url.substr(8);
+	} else {
+		return cu;
+	}
+
+	auto first_slash = rest.find('/');
+	if (first_slash == rest.npos) {
+		cu.path = "/";
+		cu.host = rest;
+	} else {
+		cu.path = rest.substr(first_slash);
+		cu.host = rest.substr(0,first_slash);
+	}
+	auto amp = cu.host.rfind('@');
+	if (amp != cu.host.npos) {
+		cu.auth = cu.host.substr(0,amp);
+		cu.host = cu.host.substr(amp+1);
+	}
+	auto ddot = cu.host.find(':');
+	if (ddot != cu.host.npos) {
+		cu.port = 0;
+		auto port_part = cu.host.substr(ddot+1);
+		cu.domain = cu.host.substr(0,ddot);
+		for (char c: port_part) {
+			if (isdigit(c)) cu.port = cu.port * 10 + (c - '0');
+			else return cu;
+		}
+	} else {
+		cu.port = cu.ssl?443:80;
+		cu.domain = cu.host;
+	}
+	cu.valid = true;
+	return cu;
+}
+
+std::unique_ptr<HttpClientRequest> HttpClient::sendRequest(const Method &method, const URL &url, HeaderList headers) {
+	auto req = open(method, url);
+	if (req == nullptr) return req;
+	for (const HeaderPair &hp: headers) req->addHeader(hp.first, hp.second);
+	if (req->send() < 0) return nullptr;
+	return req;
+}
+
+std::unique_ptr<HttpClientRequest> HttpClient::sendRequest(const Method &method, const URL &url, HeaderList headers, const Data &data) {
+	auto req = open(method, url);
+	if (req == nullptr) return req;
+	for (const HeaderPair &hp: headers) req->addHeader(hp.first, hp.second);
+	req->setBodyLength(data.size());
+	Stream &s = req->beginBody();
+	s.write(data);
+	if (req->send() < 0) return nullptr;
+	return req;
+}
+
+
+
+HttpClient::HeaderList::HeaderList(const std::initializer_list<HeaderPair> &lst)
+:ptr(0),count(lst.size())
+{
+ptr = lst.begin();
+}
+
+HttpClient::HeaderList::HeaderList(const std::vector<HeaderPair> &lst)
+:ptr(lst.data()),count(lst.size())
+{
+
+}
+
+HttpClient::HeaderList::HeaderList(const HeaderPair *lst, std::size_t count)
+:ptr(lst),count(count){}
+
+HttpClient::HttpClient(HttpClientCfg &&cfg):cfg(std::move(cfg)) {
+}
+
+}

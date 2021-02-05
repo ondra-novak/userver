@@ -79,7 +79,7 @@ void SocketStream::flushAsync(const std::string_view &data, bool firstCall, Call
 			fn(true);
 		});
 	} else {
-		sock->writeAsync(data.data(), data.size(), [this, data, firstCall, fn = std::move(fn)](int r) mutable {
+		sock->write(data.data(), data.size(), [this, data, firstCall, fn = std::move(fn)](int r) mutable {
 			if (r <= 0) {
 				wrbuff.clear();
 				fn(false);
@@ -129,7 +129,7 @@ void SocketStream::readAsync(CallbackT<void(const std::string_view &data)> &&fn)
 	std::string_view out;
 	if (curbuff.empty() && !eof) {
 		if (rdbuff.empty()) rdbuff.resize(1000);
-		sock->readAsync(rdbuff.data(), rdbuff.size(), [this, fn = std::move(fn)](int sz){
+		sock->read(rdbuff.data(), rdbuff.size(), [this, fn = std::move(fn)](int sz){
 			std::string_view out;
 			if (sz == 0) {
 				eof = true;

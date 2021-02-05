@@ -128,7 +128,7 @@ bool Socket::timeouted() const {
 Socket::Socket(int s):s(s) {
 }
 
-void Socket::readAsync(void *buffer, unsigned int size, CallbackT<void(int)> &&fn) {
+void Socket::read(void *buffer, unsigned int size, CallbackT<void(int)> &&fn) {
 	int r = recv(s, buffer,size,0);
 	if (r < 0) {
 		int err = errno;
@@ -152,7 +152,7 @@ void Socket::readAsync(void *buffer, unsigned int size, CallbackT<void(int)> &&f
 	}
 }
 
-void Socket::writeAsync(const void *buffer, unsigned int size, CallbackT<void(int)> &&fn) {
+void Socket::write(const void *buffer, unsigned int size, CallbackT<void(int)> &&fn) {
 	int r = send(s, buffer, size,0);
 	if (r < 0) {
 		int err = errno;
@@ -177,6 +177,44 @@ void Socket::writeAsync(const void *buffer, unsigned int size, CallbackT<void(in
 			fn(r);
 		});
 	}
+}
+
+bool Socket::checkSocketState() const {
+	int e = 0;
+	socklen_t len = sizeof(e);
+	int r = getsockopt(s, SOL_SOCKET, SO_ERROR, &e, &len);
+	if (r < 0) {
+		int e = errno;
+		throw std::system_error(e, std::generic_category(), "waitConnect,getsockopt");
+	} else {
+		if (e) {
+			errno = e;
+			return false;
+		} else {
+			return true;
+		}
+	}
+}
+
+bool Socket::waitConnect(int tm)  {
+	pollfd pfd = {s,POLLOUT,0};
+	int r = poll(&pfd,1,tm);
+	if (r < 0) {
+		int e = errno;
+		throw std::system_error(e, std::generic_category(), "waitConnect,poll");
+	} else if (r == 0) {
+		return false;
+	} else  {
+		return checkSocketState();
+	}
+}
+
+void Socket::waitConnect(int tm, CallbackT<void(bool)> &&cb)  {
+	getCurrentAsyncProvider()->runAsync(AsyncResource(AsyncResource::write, s),
+			[this, cb = std::move(cb)](bool timeouted) {
+				cb(!timeouted && checkSocketState());
+			}, tm<0?std::chrono::system_clock::time_point::max()
+					:std::chrono::system_clock::now()+std::chrono::milliseconds(tm));
 }
 
 }

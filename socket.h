@@ -23,8 +23,8 @@ public:
 
 	int read(void *buffer, unsigned int size) override;
 	int write(const void *buffer, unsigned int size) override;
-	void readAsync(void *buffer, unsigned int size, CallbackT<void(int)> &&fn) override;
-	void writeAsync(const void *buffer, unsigned int size, CallbackT<void(int)> &&fn) override;
+	void read(void *buffer, unsigned int size, CallbackT<void(int)> &&fn) override;
+	void write(const void *buffer, unsigned int size, CallbackT<void(int)> &&fn) override;
 
 
 	void closeOutput() override;
@@ -37,14 +37,26 @@ public:
 	int getRdTimeout() const override;
 	int getWrTimeout() const override;
 
-	Socket connect(const NetAddr &addr);
 	bool timeouted() const override;
+
+	virtual bool waitConnect(int tm) override;
+	virtual void waitConnect(int tm, CallbackT<void(bool)> &&cb) override;;
+
+
+	///Connect the socket
+	/**
+	 * @param addr address to connect
+	 * @return socket in connection state. You need to call waitConnect()
+	 */
+	static Socket connect(const NetAddr &addr);
 
 protected:
 	int s = -1;
 	int readtm=-1;
 	int writetm=-1;
 	bool tm = false;
+
+	bool checkSocketState() const;
 };
 
 }
