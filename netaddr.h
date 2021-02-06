@@ -43,7 +43,7 @@ public:
 	virtual int listen() const  override;
 	virtual int connect() const  override;
 	virtual int bindUDP() const  override;
-	virtual std::string toString(bool resolve = false) const {
+	virtual std::string toString(bool = false) const override {
 		return unknownToString(getAddr(), getAddrLen());
 	}
 	virtual std::unique_ptr<INetAddr> clone() const override {

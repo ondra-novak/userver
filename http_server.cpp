@@ -702,7 +702,7 @@ bool HttpServerRequest::sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, co
 
 		auto ext = p.extension().string();
 		if (ext.length() > 1) {
-			std::string_view exte = ext.substr(1);
+			std::string_view exte = std::string_view(ext).substr(1);
 			for (auto &&itm : mimeTypes) {
 				if (itm.first == exte) {
 					content_type = itm.second;
@@ -933,7 +933,7 @@ void HttpServer::log(ReqEvent event, const HttpServerRequest &req) {
 	}
 }
 
-void HttpServer::log(const HttpServerRequest &req, const std::string_view &msg) {
+void HttpServer::log(const HttpServerRequest &, const std::string_view &msg) {
 	std::lock_guard _(lock);
 	buildLogMsg(std::cout, msg);
 }
@@ -1025,6 +1025,31 @@ void Logger::log(ReqEvent event, const HttpServerRequest &req) noexcept {
 
 Stream& HttpServerRequest::getStream() {
 	return stream;
+}
+
+bool HttpServerRequest::directoryRedir() {
+	auto astq = uri.find('?');
+	std::string_view query;
+	std::string_view path;
+	if (astq != uri.npos) {
+		path = uri.substr(0,astq);
+		query = uri.substr(astq);
+	} else {
+		path = uri;
+	}
+	if (path.empty() || path.back() != '/') {
+		std::string newuri;
+		newuri.reserve(path.length()+query.length()+1);
+		newuri.append(uri);
+		newuri.push_back('/');
+		newuri.append(query);
+		setStatus(301);
+		set("Location",newuri);
+		send("");
+		return true;
+	} else {
+		return false;
+	}
 }
 
 }

@@ -687,8 +687,8 @@ inline void ChunkedStream<SS>::flushAsync(CallbackT<void(bool)> &&fn) {
 	flushNB();
 	if (closed) curChunk.clear();
 	else {
-		source.flushAsync(std::move(fn));
 		maxChunkSize = std::max<decltype(maxChunkSize)>(source.getOutputBufferSize(),20)-20;
+		source.flushAsync(std::move(fn));
 	}
 }
 

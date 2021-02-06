@@ -76,9 +76,9 @@ public:
 		ptr = std::make_unique<Impl>(std::forward<Fn>(fn));
 	}
 	CallbackT():ptr(nullptr) {}
-	CallbackT(nullptr_t):ptr(nullptr) {}
-	bool operator==(nullptr_t) const {return ptr == nullptr;}
-	bool operator!=(nullptr_t) const {return ptr != nullptr;}
+	CallbackT(std::nullptr_t):ptr(nullptr) {}
+	bool operator==(std::nullptr_t) const {return ptr == nullptr;}
+	bool operator!=(std::nullptr_t) const {return ptr != nullptr;}
 	CallbackT(CallbackT &&other):ptr(std::move(other.ptr)) {}
 	CallbackT &operator=(CallbackT &&other) {
 		ptr = std::move(other.ptr);return *this;

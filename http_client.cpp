@@ -333,11 +333,15 @@ void HttpClient::open(const Method &method, const URL &url,Callback  &&callback)
 		auto socket = connect(addr,cu);
 		auto s = socket.get();
 		s->waitConnect(cfg.connectTimeout,[this, cu,socket = std::move(socket), clousure=std::move(clousure)](bool ok)mutable{
-			Stream stream(new SocketStream(std::move(socket)));
-			auto req = std::make_unique<HttpClientRequest>(std::move(stream));
-			req->open(clousure->method, cu.host, cu.path);
-			req->addHeader("UserAgent", cfg.userAgent);
-			clousure->cb(std::move(req));
+			if (!ok) {
+				clousure->cb(nullptr);
+			} else {
+				Stream stream(new SocketStream(std::move(socket)));
+				auto req = std::make_unique<HttpClientRequest>(std::move(stream));
+				req->open(clousure->method, cu.host, cu.path);
+				req->addHeader("UserAgent", cfg.userAgent);
+				clousure->cb(std::move(req));
+			}
 		});
 	});
 

@@ -122,7 +122,7 @@ NetAddrList NetAddr::fromString(const std::string_view &addr_str, const std::str
 			svc = addr_str.substr(pos+1);
 		}
 	}
-	const addrinfo req = {(name.empty()?AI_PASSIVE:0)|AI_ADDRCONFIG,AF_UNSPEC,SOCK_STREAM, IPPROTO_TCP};
+	const addrinfo req = {(name.empty()?AI_PASSIVE:0)|AI_ADDRCONFIG,AF_UNSPEC,SOCK_STREAM, IPPROTO_TCP,0,0,0,0};
 	addrinfo *resp;
 
 	auto res =getaddrinfo(name.empty()?nullptr:name.c_str(), svc.c_str(), &req, &resp);
@@ -326,7 +326,7 @@ NetAddrUnix::NetAddrUnix(const std::string_view &addr):NetAddrBase<sockaddr_un>(
     }
 }
 
-std::string NetAddrUnix::toString(bool resolve) const {
+std::string NetAddrUnix::toString(bool ) const {
 	return std::string("unix:").append(addr.sun_path);
 }
 

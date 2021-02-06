@@ -36,6 +36,7 @@ public:
 	public:
 		virtual void log(ReqEvent event,const HttpServerRequest &req) noexcept = 0;
 		virtual void handler_log(const HttpServerRequest &req, const std::string_view &msg) noexcept = 0;
+		virtual ~ILogger() {}
 	};
 
 	using KeepAliveCallback = CallbackT<void(Stream &, HttpServerRequest &)>;
@@ -129,7 +130,7 @@ public:
 		std::string_view path;
 	};
 
-	void setCookie(const std::string_view &name, const std::string_view &value, const CookieDef &cookieDef = {0,false,false});
+	void setCookie(const std::string_view &name, const std::string_view &value, const CookieDef &cookieDef = {0,false,false,std::string_view(),std::string_view()});
 
 	static std::size_t maxChunkSize;
 
@@ -152,6 +153,8 @@ public:
 
 	template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<std::string_view>()))>
 	void readBodyAsync(std::size_t maxSize, Fn &&fn);
+
+	bool directoryRedir();
 
 protected:
 
@@ -314,7 +317,7 @@ public:
 	 * and return true. Once you know, that connection is a HTTP request, you can call process()
 	 * to continue processing as HTTP
 	 */
-	virtual bool onConnect(Stream &s) {return false;}
+	virtual bool onConnect(Stream &) {return false;}
 
 	///Process arbitrary stream as HTTP request
 	/**
