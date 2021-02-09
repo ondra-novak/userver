@@ -151,9 +151,34 @@ public:
 	std::intptr_t getResponseSize() const;
 	unsigned int getStatus() const;
 
+	///Asynchronously read a large body
+	/**
+	 * @param maxSize maximum allowed size of the body. If the body is larger, apropriate error status is generated and callback is not called
+	 * @param fn callback function called when reading is done. It receives buffer containing the whole body
+	 */
 	template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<std::string_view>()))>
 	void readBodyAsync(std::size_t maxSize, Fn &&fn);
 
+
+	///Asynchronously read a large body, transfer ownership of the request to the callback function
+	/**
+	 *
+	 * @param reqptr request pointer - note this function is static and expects that
+	 * it object is accessed through an unique pointer. The ownership of the pointer is
+	 * transfered to the callback function
+	 *
+	 * @param maxSize maximum alloved size of the body
+	 * @param fn function which receives pointer to request and the buffer containing the body
+	 */
+	template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<std::unique_ptr<HttpServerRequest> &>(), std::declval<std::string_view>()))>
+	static void readBodyAsync(std::unique_ptr<HttpServerRequest> &&reqptr,std::size_t maxSize, Fn &&fn);
+
+	///Redirects to directory
+	/** you need to call this, if you receive empty vpath and you need to refer objects in subdirectory
+	 * This generates redirect to the directory
+	 * @retval true generated
+	 * @retval false no action is needed
+	 */
 	bool directoryRedir();
 
 protected:
@@ -378,6 +403,15 @@ void HttpServerRequest::readBodyAsync(std::size_t maxSize, Fn &&fn) {
 	readBodyAsync2(s, buffer, maxSize, false, std::move(fn));
 
 }
+
+template<typename Fn, typename>
+void HttpServerRequest::readBodyAsync(std::unique_ptr<HttpServerRequest> &&req, std::size_t maxSize, Fn &&fn) {
+	auto p = req.get();
+	p->readBodyAsync(maxSize, [fn = std::move(fn), req = std::move(req)](const std::string_view &data) mutable {
+		return fn(req, data);
+	});
+}
+
 
 template<typename Fn>
 void HttpServerRequest::readBodyAsync2(Stream &s, std::vector<char> &buffer, std::size_t maxSize, bool overflow, Fn &&fn) {
