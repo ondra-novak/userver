@@ -9,6 +9,7 @@
 #include "http_server.h"
 
 #include <algorithm>
+#include <atomic>
 #include <sstream>
 #include <filesystem>
 #include <fstream>
