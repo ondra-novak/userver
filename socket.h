@@ -8,6 +8,7 @@
 #ifndef SRC_MAIN_SOCKET_H_
 #define SRC_MAIN_SOCKET_H_
 #include "isocket.h"
+#include "platform.h"
 
 namespace userver {
 
@@ -16,7 +17,7 @@ class NetAddr;
 class Socket: public ISocket {
 public:
 	Socket();
-	explicit Socket(int s);
+	explicit Socket(SocketHandle s);
 	virtual ~Socket();
 	Socket(Socket &&other);
 	Socket &operator=(Socket &&other);
@@ -51,7 +52,7 @@ public:
 	static Socket connect(const NetAddr &addr);
 
 protected:
-	int s = -1;
+	SocketHandle s = -1;
 	int readtm=-1;
 	int writetm=-1;
 	bool tm = false;

@@ -53,7 +53,7 @@ void HttpClientRequest::setBodyLength(std::size_t sz) {
 	addHeader("Content-Length", sz);
 }
 
-void HttpClientRequest::addHeader(const std::string_view &key, unsigned int value) {
+void HttpClientRequest::addHeader(const std::string_view &key, std::size_t value) {
 	if (key == "Content-Length") {
 		send_ctx_len = value;
 	}

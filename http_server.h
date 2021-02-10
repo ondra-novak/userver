@@ -14,12 +14,12 @@
 #include <thread>
 
 #include "async_provider.h"
-#include "shared/shared_object.h"
 
 #include "isocket.h"
 #include "socket_server.h"
 #include "stream.h"
 #include "header_value.h"
+#include <shared_mutex>
 
 namespace userver {
 
@@ -275,7 +275,7 @@ protected:
 		std::map<std::string, Handler, std::less<> > pathMapping;
 		std::shared_timed_mutex shrmux;
 	};
-	using PPathMapping = ondra_shared::SharedObject<PathMapping>;
+	using PPathMapping = std::shared_ptr<PathMapping>;
 	PPathMapping mapping;
 
 };

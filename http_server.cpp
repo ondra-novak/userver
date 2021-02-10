@@ -78,7 +78,7 @@ std::atomic<std::size_t> HttpServerRequest::identCounter(0);
 
 static std::string_view getStatusCodeMsg(int code) {
 	char num[100];
-	sprintf(num,"%d",code);
+	snprintf(num,100,"%d",code);
 	std::string_view codestr(num);
 	if (codestr.length() == 3) {
 
@@ -515,7 +515,12 @@ Stream HttpServerRequest::send() {
 	if (!has_date) {
 		 char buf[256];
 		 time_t now = time(0);
-		 struct tm tm = *gmtime(&now);
+		 struct tm tm;
+#ifdef _WIN32
+		 gmtime_s(&tm, &now);
+#else 
+		 gmtime_r(&now, &tm);
+#endif
 		 strftime(buf, sizeof buf, "%a, %d %b %Y %H:%M:%S %Z", &tm);
 		 set("Date", buf);
 	}
@@ -770,9 +775,9 @@ void HttpServerRequest::sendFileAsync(std::unique_ptr<HttpServerRequest> &reqptr
 }
 
 void HttpServerMapper::addPath(const std::string_view &path, Handler &&handler) {
-	auto m = mapping.lock();
-	if (handler == nullptr) m->pathMapping.erase(std::string(path));
-	else m->pathMapping.emplace(std::string(path), std::move(handler));
+	std::lock_guard _(mapping->shrmux);
+	if (handler == nullptr) mapping->pathMapping.erase(std::string(path));
+	else mapping->pathMapping.emplace(std::string(path), std::move(handler));
 }
 
 void HttpServerMapper::serve(Stream &&stream) {
@@ -785,13 +790,13 @@ void HttpServerMapper::serve(Stream &&stream) {
 
 bool HttpServerMapper::execHandler(PHttpServerRequest &req, const std::string_view &vpath) {
 	try {
-		auto m=mapping.lock_shared();
+		std::shared_lock _(mapping->shrmux);
 		std::string_view curvpath = vpath;
 		curvpath = splitAt("?", curvpath);
 
 		while (true) {
-			auto iter = m->pathMapping.find(curvpath);
-			if (iter != m->pathMapping.end()) {
+			auto iter = mapping->pathMapping.find(curvpath);
+			if (iter != mapping->pathMapping.end()) {
 				std::string_view restPath = vpath.substr(curvpath.size());
 				if (req == nullptr || iter->second(req, restPath)) return true;
 			}
@@ -815,7 +820,7 @@ bool HttpServerMapper::execHandler(PHttpServerRequest &req, const std::string_vi
 }
 
 HttpServerMapper::HttpServerMapper() {
-	mapping = PPathMapping::make();
+	mapping = std::make_shared<PathMapping>();
 }
 
 bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
@@ -825,15 +830,16 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 	std::string vpathbuff ( req->getURI());
 	std::string_view vpath(vpathbuff);
 	std::string_view prefix;
-	auto m = mapping.lock_shared();
-	auto iter = m->hostMapping.find(host);
-	auto iend = m->hostMapping.end();
+	std::shared_lock _(mapping->shrmux);
+	auto iter = mapping->hostMapping.find(host);
+	auto iend = mapping->hostMapping.end();
 	if (iter != iend) prefix = iter->second;
 
 	if (vpath == "/" && req->getMethod() == "DELETE") {//special uri - clear mapping
 		if (iter != iend) {
-			m.release();
-			mapping.lock()->hostMapping.erase(iter);
+			_.unlock();
+			std::unique_lock __(mapping->shrmux);
+			mapping->hostMapping.erase(iter);
 		}
 		req->sendErrorPage(202);
 		return true;
@@ -853,8 +859,9 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 		prefix = vpath.substr(0, p);
 		if (iter != iend && prefix.length() > plen) break;
 		if (execHandler(req, vpath.substr(p))) {
-			m.release();
-			mapping.lock()->hostMapping[host] = prefix;
+			_.unlock();
+			std::unique_lock __(mapping->shrmux);
+			mapping->hostMapping[host] = prefix;
 			return true;
 		}
 		p = vpath.find('/',p+1);

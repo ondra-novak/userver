@@ -35,3 +35,7 @@ Makefile
 cmake_install.cmake
 CMakeFiles
 
+/Debug
+/out/build
+/x64/Debug
+/CMakeSettings.json

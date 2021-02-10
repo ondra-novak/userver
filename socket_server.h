@@ -44,10 +44,10 @@ public:
 	bool waitAcceptAsync(AsyncCallback &&callback);
 
 protected:
-	std::vector<int> fds;
+	std::vector<SocketHandle> fds;
 	bool exit = false;
 
-	int waitForSocket(sockaddr_storage &sin);
+	SocketHandle waitForSocket(sockaddr_storage &sin);
 
 	class AsyncAcceptor;
 	std::shared_ptr<AsyncAcceptor> asyncState;

@@ -8,6 +8,7 @@
 #ifndef SRC_USERVER_IDISPATCHER_H_
 #define SRC_USERVER_IDISPATCHER_H_
 
+#include "platform.h"
 #include "helpers.h"
 
 
@@ -17,8 +18,8 @@ class IDispatcher {
 public:
 
 	using Callback = CallbackT<void(bool)>;
-	virtual void waitRead(int socket, Callback &&cb, std::chrono::system_clock::time_point timeout) = 0;
-	virtual void waitWrite(int socket, Callback &&cb, std::chrono::system_clock::time_point timeout) = 0;
+	virtual void waitRead(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) = 0;
+	virtual void waitWrite(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) = 0;
 	virtual void execAsync(Callback &&cb) = 0;
 
 	struct Task {

@@ -5,19 +5,15 @@
  *      Author: ondra
  */
 
-#include <errno.h>
-#include <poll.h>
-#include "socket.h"
-
-#include <sys/socket.h>
-#include <unistd.h>
-#include <csignal>
+#include "platform.h"
 #include <cstring>
 #include <sstream>
 
 #include "async_provider.h"
 #include "async_resource.h"
 #include "netaddr.h"
+
+#include "socket.h"
 
 namespace userver {
 
@@ -125,7 +121,7 @@ bool Socket::timeouted() const {
 	return tm;
 }
 
-Socket::Socket(int s):s(s) {
+Socket::Socket(SocketHandle s):s(s) {
 }
 
 void Socket::read(void *buffer, unsigned int size, CallbackT<void(int)> &&fn) {

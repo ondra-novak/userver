@@ -26,8 +26,8 @@ public:
 	Dispatcher_EPoll();
 	virtual ~Dispatcher_EPoll() override;
 
-	virtual void waitRead(int socket, Callback &&cb, std::chrono::system_clock::time_point timeout) override;
-	virtual void waitWrite(int socket, Callback &&cb, std::chrono::system_clock::time_point timeout) override;
+	virtual void waitRead(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) override;
+	virtual void waitWrite(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) override;
 	virtual void execAsync(Callback &&cb) override;
 	virtual Task getTask() override;
 	virtual void stop() override;

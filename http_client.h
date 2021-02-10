@@ -11,6 +11,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <optional>
 
 #include "stream.h"
 #include "header_value.h"
@@ -56,7 +57,7 @@ public:
 	 * @param key header key
 	 * @param value header value - no escaping is involved, always check values especially when passed from users
 	 */
-	void addHeader(const std::string_view &key, unsigned int value);
+	void addHeader(const std::string_view &key, std::size_t value);
 	///Sets expected length of the body
 	/** It is better to set the length of the body, when it is known. This improves throughput
 	 * @param sz expected size of the body.

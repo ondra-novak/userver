@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include <sys/socket.h>
+#include "platform.h"
 
 namespace userver {
 
@@ -19,12 +19,12 @@ class INetAddr {
 public:
 
 	virtual ~INetAddr() {}
-	virtual std::size_t getAddrLen() const = 0;
+	virtual socklen_t getAddrLen() const = 0;
 	virtual const sockaddr *getAddr() const = 0;
 	virtual std::string toString(bool resolve = false) const = 0;
-	virtual int listen() const  = 0;
-	virtual int connect() const  = 0;
-	virtual int bindUDP() const = 0;
+	virtual SocketHandle listen() const  = 0;
+	virtual SocketHandle connect() const  = 0;
+	virtual SocketHandle bindUDP() const = 0;
 	virtual std::unique_ptr<INetAddr> clone() const = 0;
 
 
@@ -38,11 +38,11 @@ class NetAddrBase: public INetAddr {
 public:
 
 	explicit NetAddrBase(const T &item):addr(item) {}
-	virtual std::size_t getAddrLen() const override {return sizeof(addr);}
+	virtual socklen_t getAddrLen() const override {return sizeof(addr);}
 	virtual const sockaddr *getAddr() const override  {return reinterpret_cast<const struct sockaddr *>(&addr);}
-	virtual int listen() const  override;
-	virtual int connect() const  override;
-	virtual int bindUDP() const  override;
+	virtual SocketHandle listen() const  override;
+	virtual SocketHandle connect() const  override;
+	virtual SocketHandle bindUDP() const  override;
 	virtual std::string toString(bool = false) const override {
 		return unknownToString(getAddr(), getAddrLen());
 	}
@@ -73,12 +73,12 @@ public:
 	static NetAddrList fromString(const std::string_view &addr_str, const std::string_view &default_svc = std::string_view());
 	static NetAddr fromSockAddr(const sockaddr &addr);
 
-	std::size_t getAddrLen() const {return addr->getAddrLen();}
+	socklen_t getAddrLen() const {return addr->getAddrLen();}
 	const sockaddr *getAddr() const {return addr->getAddr();}
 	std::string toString(bool resolve) const {return addr->toString(resolve);}
-	int listen() const  {return addr->listen();}
-	int connect() const  {return addr->connect();}
-	int bindUDP() const  {return addr->bindUDP();}
+	SocketHandle listen() const  {return addr->listen();}
+	SocketHandle connect() const  {return addr->connect();}
+	SocketHandle bindUDP() const  {return addr->bindUDP();}
 
 protected:
 	PNetAddr addr;
@@ -86,17 +86,17 @@ protected:
 };
 
 template<typename T>
-inline int NetAddrBase<T>::listen() const {
+inline SocketHandle NetAddrBase<T>::listen() const {
 	error(this,EINVAL, "Unsupported address");return 0;
 }
 
 template<typename T>
-inline int NetAddrBase<T>::connect() const {
+inline SocketHandle NetAddrBase<T>::connect() const {
 	error(this,EINVAL, "Unsupported address");return 0;
 }
 
 template<typename T>
-inline int NetAddrBase<T>::bindUDP() const {
+inline SocketHandle NetAddrBase<T>::bindUDP() const {
 	error(this,EINVAL, "Unsupported address");return 0;
 }
 

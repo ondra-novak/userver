@@ -29,7 +29,7 @@ class DGramSocket {
 public:
 
 	///Create object using socket id
-	DGramSocket(int i);
+	DGramSocket(SocketHandle i);
 	///Create object bound to specified address
 	DGramSocket(const NetAddr &addr);
 
@@ -94,7 +94,7 @@ public:
 
 
 protected:
-	int s;
+	SocketHandle s;
 	std::vector<char> inputBuffer;
 	std::vector<char> addrBuffer;
 	int rcvsize;

@@ -26,7 +26,7 @@ public:
 	virtual void stop();
 	virtual void runAsync(const AsyncResource &res,
 			IAsyncProvider::Callback &&cb,
-			const std::chrono::_V2::system_clock::time_point &timeout);
+			const std::chrono::system_clock::time_point &timeout);
 	virtual bool yield();
 	virtual void runAsync(IAsyncProvider::Callback &&cb);
 
@@ -67,7 +67,7 @@ inline void AsyncProviderImpl::stop() {
 
 inline void AsyncProviderImpl::runAsync(const AsyncResource &res,
 		IAsyncProvider::Callback &&cb,
-		const std::chrono::_V2::system_clock::time_point &timeout) {
+		const std::chrono::system_clock::time_point &timeout) {
 
 	std::unique_lock _(lock);
 	PDispatch d (std::move(dispatchers.front()));

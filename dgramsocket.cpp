@@ -6,15 +6,11 @@
  */
 
 
-#include <poll.h>
-#include <sys/socket.h>
-#include <cerrno>
-
+#include "platform.h"
 #include "netaddr.h"
 #include "async_resource.h"
 #include "dgramsocket.h"
 
-#include <unistd.h>
 #include <system_error>
 namespace userver {
 
@@ -28,7 +24,7 @@ DGramSocket::DGramSocket(const NetAddr &addr):DGramSocket(addr.bindUDP()) {}
 
 bool DGramSocket::recv(int timeout) {
 	sockaddr *sin = reinterpret_cast<sockaddr *>(addrBuffer.data());
-	socklen_t slen = addrBuffer.size();
+	socklen_t slen = static_cast<socklen_t>(addrBuffer.size());
 	int r = ::recvfrom(s, inputBuffer.data(), inputBuffer.size(), MSG_DONTWAIT|MSG_TRUNC, sin, &slen);
 	if (r < 0) {
 		int err = errno;

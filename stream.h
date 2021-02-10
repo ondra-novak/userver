@@ -283,7 +283,7 @@ public:
 				ln.resize(p);
 				return true;
 			}
-			e = ln.length() - sep.length()+1;
+			e = static_cast<int>(ln.length() - sep.length()+1);
 			b = read();
 		}
 		return !ln.empty();
@@ -404,7 +404,7 @@ protected:
 template<typename SS>
 class LimitedStream: public AbstractStream {
 public:
-	LimitedStream(SS &&source, unsigned int maxRead, unsigned int maxWrite)
+	LimitedStream(SS &&source, std::size_t maxRead, std::size_t maxWrite)
 		:source(std::forward<SS>(source)), maxRead(maxRead), maxWrite(maxWrite) {}
 	~LimitedStream();
 	virtual std::string_view read() override;
@@ -420,8 +420,8 @@ public:
 	virtual std::size_t getOutputBufferSize() const override;
 protected:
 	SS source;
-	unsigned int maxRead;
-	unsigned int maxWrite;
+	std::size_t maxRead;
+	std::size_t maxWrite;
 	std::string_view curBuff;
 
 };

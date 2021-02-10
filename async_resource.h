@@ -8,7 +8,11 @@
 #ifndef SRC_MINISERVER_ASYNC_RESOURCE_H_
 #define SRC_MINISERVER_ASYNC_RESOURCE_H_
 
+#include "platform.h"
+
 namespace userver {
+
+
 
 class AsyncResource {
 public:
@@ -17,9 +21,9 @@ public:
 		read, write
 	};
 	Op op;
-	int socket;
+	SocketHandle socket;
 
-	AsyncResource(Op op, int socket):op(op),socket(socket) {}
+	AsyncResource(Op op, SocketHandle socket):op(op),socket(socket) {}
 
 
 };

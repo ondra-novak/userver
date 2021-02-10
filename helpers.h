@@ -10,6 +10,9 @@
 #include <type_traits>
 #include <algorithm>
 #include <memory>
+#include <string_view>
+#include <stdexcept>
+#include <cctype>
 
 namespace userver {
 
