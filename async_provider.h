@@ -45,7 +45,11 @@ public:
 	 */
 	virtual bool yield() = 0;
 
+	///Stops async provider - for example if you need to exit server
 	virtual void stop() = 0;
+
+	///Returns true, if async provider has been stopped
+	virtual bool stopped() const = 0;
 
 
 	virtual ~IAsyncProvider() {}
@@ -97,6 +101,10 @@ public:
 	template<typename Fn>
 	void runAsync(Fn &&fn) {
 		get()->runAsync([fn = std::forward<Fn>(fn)](bool) mutable {fn();});
+	}
+
+	bool stopped() const {
+		return get()->stopped();
 	}
 };
 

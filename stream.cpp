@@ -111,18 +111,20 @@ void SocketStream::flushAsync(CallbackT<void(bool)> &&fn) {
 
 void SocketStream::flush_lk() {
 	std::string_view s(wrbuff);
-	unsigned int wx = sock->write(s.data(),s.length());
-	bool rep = wx < s.length();
-	while (rep) {
-		s = s.substr(wx);
-		wx = sock->write(s.data(),s.length());
-		rep = wx < s.length();
-		if (rep && wx < wrbufflimit) {
-			wrbufflimit = (wx * 2+2) / 3;
+	if (!s.empty())  {
+		unsigned int wx = sock->write(s.data(),s.length());
+		bool rep = wx < s.length();
+		while (rep) {
+			s = s.substr(wx);
+			wx = sock->write(s.data(),s.length());
+			rep = wx < s.length();
+			if (rep && wx < wrbufflimit) {
+				wrbufflimit = (wx * 2+2) / 3;
+			}
 		}
+		wrbufflimit = std::min(wrbufflimit *3/2, maxWrBufferSize);
+		wrbuff.clear();
 	}
-	wrbufflimit = std::min(wrbufflimit *3/2, maxWrBufferSize);
-	wrbuff.clear();
 }
 
 void SocketStream::readAsync(CallbackT<void(const std::string_view &data)> &&fn) {

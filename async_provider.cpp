@@ -23,12 +23,13 @@ public:
 	using Factory = std::unique_ptr<IDispatcher> (*)();
 
 	AsyncProviderImpl(unsigned int dispcnt, Factory factory);
-	virtual void stop();
+	virtual void stop() override;
 	virtual void runAsync(const AsyncResource &res,
 			IAsyncProvider::Callback &&cb,
-			const std::chrono::system_clock::time_point &timeout);
-	virtual bool yield();
-	virtual void runAsync(IAsyncProvider::Callback &&cb);
+			const std::chrono::system_clock::time_point &timeout) override;
+	virtual bool yield() override;
+	virtual void runAsync(IAsyncProvider::Callback &&cb) override;
+	virtual bool stopped() const override {return _stopped;}
 
 protected:
 	using PDispatch = std::unique_ptr<IDispatcher>;
@@ -36,6 +37,7 @@ protected:
 	std::queue<IDispatcher *> dispqueue;
 	std::mutex lock;
 	std::condition_variable wt;
+	bool _stopped = false;
 
 
 
@@ -57,6 +59,7 @@ AsyncProvider createAsyncProvider(unsigned int dispatchers, AsyncProviderType ty
 
 inline void AsyncProviderImpl::stop() {
 	std::unique_lock _(lock);
+	_stopped = true;
 	for (std::size_t i = 0; i < dispatchers.size(); i++) {
 		PDispatch d (std::move(dispatchers.front()));
 		d->stop();
