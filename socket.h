@@ -22,10 +22,10 @@ public:
 	Socket(Socket &&other);
 	Socket &operator=(Socket &&other);
 
-	int read(void *buffer, unsigned int size) override;
-	int write(const void *buffer, unsigned int size) override;
-	void read(void *buffer, unsigned int size, CallbackT<void(int)> &&fn) override;
-	void write(const void *buffer, unsigned int size, CallbackT<void(int)> &&fn) override;
+	int read(void *buffer, std::size_t size) override;
+	int write(const void *buffer, std::size_t size) override;
+	void read(void *buffer, std::size_t size, CallbackT<void(int)> &&fn) override;
+	void write(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn) override;
 
 
 	void closeOutput() override;

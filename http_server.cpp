@@ -916,6 +916,7 @@ void HttpServer::listen() {
 void HttpServer::addThread() {
 	setThreadAsyncProvider(asyncProvider);
 	asyncProvider.start_thread();
+	setThreadAsyncProvider(nullptr);
 }
 
 AsyncProvider HttpServer::getAsyncProvider() {

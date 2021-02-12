@@ -22,9 +22,20 @@ namespace userver {
 		next_timeout = std::chrono::system_clock::time_point::max();
 		regs.push_back(Reg(nullptr, next_timeout));
 
-		sockaddr_in sin;
+		sockaddr_in cursin;
+		cursin.sin_family = AF_INET;
+		cursin.sin_addr.S_un.S_un_b = { 127,0,0,1 };
+		cursin.sin_port = 0;
+		if (bind(intr_r, reinterpret_cast<const sockaddr*>(&cursin), sizeof(cursin))) {
+			throw std::system_error(WSAGetLastError(), win32_error_category(), "bind on intr socket");
+		}
+
+		sockaddr_storage sin;
 		int sinlen = sizeof(sin);
-		getsockname(intr_r, reinterpret_cast<sockaddr*>(&sin), &sinlen);
+		int e = getsockname(intr_r, reinterpret_cast<sockaddr*>(&sin), &sinlen);
+		if (e) {
+			throw std::system_error(WSAGetLastError(), win32_error_category(), "getsockname on intr socket");
+		}
 		thisAddr = NetAddr::fromSockAddr(*reinterpret_cast<sockaddr*>(&sin));
 	}
 
@@ -85,8 +96,12 @@ namespace userver {
 				int wait_tm;
 				if (now > next_timeout) wait_tm = 0;
 				else if (next_timeout == std::chrono::system_clock::time_point::max()) wait_tm = -1;
-				else wait_tm = std::chrono::duration_cast<std::chrono::milliseconds>(next_timeout - now).count();
-				int r = WSAPoll(waiting.data(), waiting.size(), wait_tm);
+				else {
+					auto z = std::chrono::duration_cast<std::chrono::milliseconds>(next_timeout - now).count();
+					if (z > std::numeric_limits<int>::max()) wait_tm = std::numeric_limits<int>::max();
+					else wait_tm = static_cast<int>(z);
+				}
+				int r = WSAPoll(waiting.data(), static_cast<ULONG>(waiting.size()), wait_tm);
 				if (r < 0) {
 					int e = WSAGetLastError();
 					if (e == WSAEINTR) continue;

@@ -47,7 +47,6 @@ public:
 
 	virtual void stop() = 0;
 
-
 	virtual ~IAsyncProvider() {}
 
 
@@ -98,6 +97,13 @@ public:
 	void runAsync(Fn &&fn) {
 		get()->runAsync([fn = std::forward<Fn>(fn)](bool) mutable {fn();});
 	}
+
+	///Installs a signal handler
+	/** This allows to stop asynchronous provider on signal SIGTERM and SIGINT
+	* Only one asynchronous provider can has this functionality. If this function
+	* called on different provider, it replaces current registration
+	*/
+	void stopOnSignal();
 };
 
 enum class AsyncProviderType {

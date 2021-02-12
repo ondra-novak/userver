@@ -12,6 +12,7 @@
 #include <ws2tcpip.h>
 #include "netaddr.h"
 #include "win_category.h"
+#include "winsock.h"
 
 namespace userver {
 
@@ -71,6 +72,8 @@ namespace userver {
 	NetAddrList NetAddr::fromString(const std::string_view& addr_str, const std::string_view& default_svc) {
 		std::string name;
 		std::string svc;
+
+		initWinsock();
 
 		if (addr_str.empty()) INetAddr::error(addr_str, EINVAL, "Address can't be empty");
 		if (addr_str[0] == '[') {
@@ -253,7 +256,7 @@ namespace userver {
 	}
 
 	SocketHandle NetAddrIPv6::connect() const {
-		SocketHandle sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+		SocketHandle sock = ::socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 		if (sock < 0) error(this, WSAGetLastError(), "socket()");
 		try {
 			int flag = 1;

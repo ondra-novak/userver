@@ -26,7 +26,7 @@ namespace userver {
 	bool DGramSocket::recv(int timeout) {
 		sockaddr* sin = reinterpret_cast<sockaddr*>(addrBuffer.data());
 		socklen_t slen = static_cast<socklen_t>(addrBuffer.size());
-		int r = ::recvfrom(s, inputBuffer.data(), inputBuffer.size(), MSG_DONTWAIT | MSG_TRUNC, sin, &slen);
+		int r = ::recvfrom(s, inputBuffer.data(), static_cast<unsigned int>(inputBuffer.size()), MSG_DONTWAIT | MSG_TRUNC, sin, &slen);
 		if (r < 0) {
 			int err = WSAGetLastError();
 			if (err == WSAEWOULDBLOCK) {
@@ -73,7 +73,7 @@ namespace userver {
 	void DGramSocket::send(const std::string_view& data, const NetAddr& target) {
 		const sockaddr* sin = target.getAddr();
 		socklen_t slen = target.getAddrLen();
-		int r = ::sendto(s, data.data(), data.size(), 0, sin, slen);
+		int r = ::sendto(s, data.data(), static_cast<unsigned int>(data.size()), 0, sin, slen);
 		if (r < 0) {
 			int err = WSAGetLastError();
 			if (err == WSAEWOULDBLOCK) {
