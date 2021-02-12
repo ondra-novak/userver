@@ -2,6 +2,8 @@
 #ifndef USERVER_PLATFORM_PCH
 #define USERVER_PLATFORM_PCH
 
+#include "platform_def.h"
+
 #ifdef _WIN32 
 
 #define WIN32_LEAN_AND_MEAN
@@ -13,21 +15,15 @@
 
 namespace userver {
 
-	using SocketHandle = SOCKET;
-	static constexpr SocketHandle INVALID_SOCKET_HANDLE = INVALID_SOCKET;
 
-
-	inline auto error_category() {return win32_error_category();}
-
+	inline auto &error_category() {return win32_error_category();}
 
 }
 
+#define MSG_DONTWAIT 0
 #undef min
 #undef max
-using socklen_t = int;
-#define MSG_DONTWAIT 0
 #undef DELETE
-
 
 #else
 

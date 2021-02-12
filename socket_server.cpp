@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <mutex>
+#include <iterator>
 
 #include "async_provider.h"
 #include "async_resource.h"
@@ -65,7 +66,7 @@ std::optional<SocketServer::AcceptInfo> SocketServer::waitAcceptGetPeer() {
 
 static SocketHandle acceptConn(SocketHandle src, sockaddr *sin, socklen_t *slen) {
 #ifdef _WIN32
-	SocketHandle s = accept(pfds[i].fd, reinterpret_cast<sockaddr*>(&sin), &slen);
+	SocketHandle s = accept(src, sin, slen);
 	if (s == SOCKET_ERROR) {
 		throw std::system_error(WSAGetLastError(), error_category(),"Accept");
 	}
@@ -83,18 +84,12 @@ static SocketHandle acceptConn(SocketHandle src, sockaddr *sin, socklen_t *slen)
 }
 
 SocketHandle SocketServer::waitForSocket(sockaddr_storage &sin) {
-	pollfd *pfds = reinterpret_cast<pollfd *>(alloca(sizeof(pollfd)*fds.size()));
-	{
-		unsigned int idx = 0;
-		for (auto i: fds) {
-			pfds[idx].events = POLLIN;
-			pfds[idx].fd = i;
-			pfds[idx].revents = 0;
-			++idx;
-		}
-	}
+	std::basic_string<pollfd> pfds;
+	std::transform(fds.begin(), fds.end(), std::back_insert_iterator(pfds), [](SocketHandle i) {
+		return pollfd{ i,POLLIN,0 };
+	});
 #ifdef _WIN32
-	int r = WSAPoll(pfds, static_cast<ULONG>(fds.size()), -1);
+	int r = WSAPoll(pfds.data(), static_cast<ULONG>(pfds.size()), -1);
 	if (r < 0) {
 		if (exit) return INVALID_SOCKET_HANDLE;
 		int e = WSAGetLastError();
@@ -106,17 +101,17 @@ SocketHandle SocketServer::waitForSocket(sockaddr_storage &sin) {
 #endif
 		throw std::system_error(e, error_category(), "Failed to wait on listening socket");
 	}
-	for (unsigned int i = 0, cnt = fds.size(); i < cnt; i++) {
-		if (pfds[i].revents & POLLIN) {
+	for (auto &fd: pfds) {
+		if (fd.revents & POLLIN) {
 			socklen_t slen = sizeof(sin);
 			try {
-				return acceptConn(pfds[i].fd, reinterpret_cast<sockaddr *>(&sin),&slen);
+				return acceptConn(fd.fd, reinterpret_cast<sockaddr *>(&sin),&slen);
 			} catch (...) {
 				if (exit) return INVALID_SOCKET_HANDLE;
 			}
 		}
 	}
-	return -1;
+	return INVALID_SOCKET_HANDLE;
 }
 
 class SocketServer::AsyncAcceptor{

@@ -12,14 +12,13 @@
 #include <functional>
 #include <map>
 #include <thread>
+#include <shared_mutex>
 
 #include "async_provider.h"
-
 #include "isocket.h"
 #include "socket_server.h"
 #include "stream.h"
 #include "header_value.h"
-#include <shared_mutex>
 
 namespace userver {
 

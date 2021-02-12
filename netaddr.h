@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include "platform.h"
+#include "platform_def.h"
 
 namespace userver {
 

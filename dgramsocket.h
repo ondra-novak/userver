@@ -8,12 +8,12 @@
 #ifndef SRC_USERVER_DGRAMSOCKET_H_
 #define SRC_USERVER_DGRAMSOCKET_H_
 
-#include "platform.h"
 #include <string_view>
 #include <type_traits>
 #include <vector>
 #include <chrono>
 #include "async_provider.h"
+#include "platform_def.h"
 
 #include "helpers.h"
 

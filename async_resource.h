@@ -8,7 +8,7 @@
 #ifndef SRC_MINISERVER_ASYNC_RESOURCE_H_
 #define SRC_MINISERVER_ASYNC_RESOURCE_H_
 
-#include "platform.h"
+#include "platform_def.h"
 
 namespace userver {
 

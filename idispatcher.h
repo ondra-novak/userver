@@ -8,7 +8,7 @@
 #ifndef SRC_USERVER_IDISPATCHER_H_
 #define SRC_USERVER_IDISPATCHER_H_
 
-#include "platform.h"
+#include "platform_def.h"
 #include "helpers.h"
 
 

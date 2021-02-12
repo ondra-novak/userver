@@ -8,7 +8,6 @@
 #define SRC_USERVER_DISPATCHER_H_
 
 
-#include "platform.h"
 #include <atomic>
 #include <chrono>
 #include <mutex>

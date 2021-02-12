@@ -15,12 +15,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="framework.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="pch.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="async_provider.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -75,8 +69,8 @@
     <ClInclude Include="win_category.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="winsock.h">
-      <Filter>Source Files</Filter>
+    <ClInclude Include="platform_def.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -98,22 +92,22 @@
     <ClCompile Include="stream.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="win_dispatcher.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="win_dgramsocket.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="win_netaddr.cpp">
+    <ClCompile Include="dispatcher.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="win_socket.cpp">
+    <ClCompile Include="init.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="win_socket_server.cpp">
+    <ClCompile Include="netaddr.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="winsock.cpp">
+    <ClCompile Include="socket.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="socket_server.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

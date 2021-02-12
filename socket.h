@@ -8,7 +8,7 @@
 #ifndef SRC_MAIN_SOCKET_H_
 #define SRC_MAIN_SOCKET_H_
 #include "isocket.h"
-#include "platform.h"
+#include "platform_def.h"
 
 namespace userver {
 

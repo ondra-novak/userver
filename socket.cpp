@@ -187,7 +187,7 @@ void Socket::read(void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
 #endif
 			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::read, s), [this, buffer, size, fn = std::move(fn)](bool b){
 				if (b) {
-					tm = true;
+					this->tm = true;
 					fn(0);
 				} else {
 					fn(read(buffer, size));
@@ -218,7 +218,7 @@ void Socket::write(const void *buffer, std::size_t size, CallbackT<void(int)> &&
 #endif
 			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::write, s), [this, buffer, size, fn = std::move(fn)](bool b){
 				if (b) {
-					tm = true;
+					this->tm = true;
 					fn(0);
 				} else {
 					fn(write(buffer, size));
@@ -323,7 +323,7 @@ void Socket::waitConnect(int tm, CallbackT<void(bool)> &&cb)  {
 			}
 		}
 	}, checkTime);
-}
+
 #else
 	getCurrentAsyncProvider()->runAsync(AsyncResource(AsyncResource::write, s),
 			[this, cb = std::move(cb)](bool timeouted) {

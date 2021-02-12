@@ -5,8 +5,8 @@
  *      Author: ondra
  */
 
-#include <userver/init.h>
 #include "platform.h"
+#include "init.h"
 #include <iomanip>
 #include <sstream>
 #include "netaddr.h"
@@ -222,7 +222,7 @@ SocketHandle newSocket(const INetAddr *owner, int family, int type, int proto) {
 #endif
 }
 
-int NetAddrIPv4::listen() const {
+SocketHandle NetAddrIPv4::listen() const {
 	SocketHandle sock = newSocket(this, AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	try {
 		int flag = 1;
@@ -239,7 +239,7 @@ int NetAddrIPv4::listen() const {
 	}
 }
 
-int NetAddrIPv4::connect() const {
+SocketHandle NetAddrIPv4::connect() const {
 	SocketHandle sock = newSocket(this, AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	try {
 		int flag = 1;
@@ -274,8 +274,12 @@ std::string NetAddrIPv6::toString(bool resolve) const {
 		std::ostringstream out;
 		out << "[" << std::hex;
 		bool sep = false;
-		for (auto c: addr.sin6_addr.__in6_u.__u6_addr16) {
-			if (sep) out << ":";else sep = true;
+#ifdef _WIN32
+		for (auto c : addr.sin6_addr.u.Word) {
+#else
+		for (auto c : addr.sin6_addr.__in6_u.__u6_addr16) {
+#endif
+			if (sep) out << ":"; else sep = true;
 			out << htons(c);
 		}
 		out << "]" << std::dec;
@@ -285,7 +289,7 @@ std::string NetAddrIPv6::toString(bool resolve) const {
 	}
 }
 
-int NetAddrIPv6::listen() const {
+SocketHandle NetAddrIPv6::listen() const {
 	SocketHandle sock = newSocket(this, AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 	try {
 		int flag = 1;
@@ -302,7 +306,7 @@ int NetAddrIPv6::listen() const {
 	}
 }
 
-int NetAddrIPv6::connect() const {
+SocketHandle NetAddrIPv6::connect() const {
 	SocketHandle sock = newSocket(this, AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 	try {
 		int flag = 1;
@@ -415,7 +419,7 @@ inline int NetAddrUnix::bindUDP() const {
 
 #endif
 
-inline int NetAddrIPv4::bindUDP() const {
+SocketHandle NetAddrIPv4::bindUDP() const {
 	SocketHandle sock = newSocket(this, AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	try {
 		if (::bind(sock,getAddr(), getAddrLen())) {
@@ -429,7 +433,7 @@ inline int NetAddrIPv4::bindUDP() const {
 }
 
 
-inline int NetAddrIPv6::bindUDP() const {
+SocketHandle NetAddrIPv6::bindUDP() const {
 	SocketHandle sock = newSocket(this, AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
 	try {
 		if (::bind(sock,getAddr(), getAddrLen())) {

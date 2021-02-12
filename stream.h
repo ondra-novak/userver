@@ -8,10 +8,9 @@
 #ifndef SRC_MAIN_STREAM_H_
 #define SRC_MAIN_STREAM_H_
 
-#include "socket.h"
 #include <memory>
 #include <mutex>
-#include "helpers.h"
+#include "isocket.h"
 
 namespace userver {
 

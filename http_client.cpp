@@ -8,7 +8,7 @@
 #include "http_client.h"
 
 #include "async_provider.h"
-#include "netaddr.h"
+#include "socket.h"
 namespace userver {
 
 HttpClientRequest::HttpClientRequest(Stream &&s)

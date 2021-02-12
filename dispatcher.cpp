@@ -85,8 +85,9 @@ void Dispatcher::notify() {
 		if (e != EWOULDBLOCK) {
 			throw std::system_error(e, error_category());
 		}
-	}
 #endif
+		
+	}
 }
 
 void Dispatcher::waitEvent(int event, SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) {

@@ -13,6 +13,8 @@
 #include <vector>
 #include <optional>
 
+#include "helpers.h"
+#include "netaddr.h"
 #include "stream.h"
 #include "header_value.h"
 
