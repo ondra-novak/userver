@@ -5,39 +5,66 @@
  *      Author: ondra
  */
 
-#include <unistd.h>
+#include "platform.h"
 #include "dispatcher.h"
 
 #include <fcntl.h>
-#include <cerrno>
 
 namespace userver {
 
 Dispatcher::Dispatcher()
 :stopped(false)
 {
+#ifdef _WIN32
+	intr_r = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	waiting.push_back({ intr_r,POLLIN,0 });
+	next_timeout = std::chrono::system_clock::time_point::max();
+	regs.push_back(Reg(nullptr, next_timeout));
+
+	sockaddr_in cursin;
+	cursin.sin_family = AF_INET;
+	cursin.sin_addr.S_un.S_un_b = { 127,0,0,1 };
+	cursin.sin_port = 0;
+	if (bind(intr_r, reinterpret_cast<const sockaddr*>(&cursin), sizeof(cursin))) {
+		throw std::system_error(WSAGetLastError(), win32_error_category(), "bind on intr socket");
+	}
+
+	sockaddr_storage sin;
+	int sinlen = sizeof(sin);
+	int e = getsockname(intr_r, reinterpret_cast<sockaddr*>(&sin), &sinlen);
+	if (e) {
+		throw std::system_error(WSAGetLastError(), error_category(), "getsockname on intr socket");
+	}
+	thisAddr = NetAddr::fromSockAddr(*reinterpret_cast<sockaddr*>(&sin));
+
+#else
 	int fds[2];
 	if (::pipe2(fds, O_CLOEXEC|O_NONBLOCK)<0) {
-		throw std::system_error(errno, std::generic_category());
+		throw std::system_error(errno, error_category());
 	}
 	intr_r = fds[0];
 	intr_w = fds[1];
 	waiting.push_back({intr_r,POLLIN,0});
 	next_timeout = std::chrono::system_clock::time_point::max();
 	regs.push_back(Reg(nullptr, next_timeout));
+#endif
 }
 
 Dispatcher::~Dispatcher() {
+#ifdef _WIN32
+	closesocket(intr_r);
+#else
 	close(intr_r);
 	close(intr_w);
+#endif
 }
 
 
-void Dispatcher::waitRead(int socket, Callback &&cb, std::chrono::system_clock::time_point timeout) {
+void Dispatcher::waitRead(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) {
 	waitEvent(POLLIN, socket, std::move(cb), timeout);
 }
 
-void Dispatcher::waitWrite(int socket, Callback &&cb, std::chrono::system_clock::time_point timeout) {
+void Dispatcher::waitWrite(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) {
 	waitEvent(POLLOUT, socket, std::move(cb), timeout);
 }
 
@@ -47,16 +74,22 @@ void Dispatcher::execAsync(Callback &&cb) {
 
 void Dispatcher::notify() {
 	char b = 1;
+#ifdef _WIN32
+	int r = sendto(intr_r, &b, 1, 0, thisAddr->getAddr(), thisAddr->getAddrLen());
+	if (r < 0) {
+		int e = WSAGetLastError();
+		throw std::system_error(e, error_category());
+#else
 	if (!::write(intr_w, &b, 1)) {
 		int e = errno;
 		if (e != EWOULDBLOCK) {
-			throw std::system_error(e, std::generic_category());
+			throw std::system_error(e, error_category());
 		}
 	}
-
+#endif
 }
 
-void Dispatcher::waitEvent(int event, int socket, Callback &&cb, std::chrono::system_clock::time_point timeout) {
+void Dispatcher::waitEvent(int event, SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) {
 	std::unique_lock _(lk);
 	if (stopped) return;
 	new_waiting.push_back({socket, static_cast<short >(event), 0});
@@ -88,13 +121,26 @@ Dispatcher::Task Dispatcher::getTask() {
 			int wait_tm;
 			if (now > next_timeout) wait_tm = 0;
 			else if (next_timeout == std::chrono::system_clock::time_point::max()) wait_tm = -1;
-			else wait_tm = std::chrono::duration_cast<std::chrono::milliseconds>(next_timeout - now).count();
+			else {
+					auto z = std::chrono::duration_cast<std::chrono::milliseconds>(next_timeout - now).count();
+					if (z > std::numeric_limits<int>::max()) wait_tm = std::numeric_limits<int>::max();
+					else wait_tm = static_cast<int>(z);
+				}
+#ifdef _WIN32
+			int r = WSAPoll(waiting.data(), static_cast<ULONG>(waiting.size()), wait_tm);
+			if (r < 0) {
+				int e = WSAGetLastError();
+				if (e == WSAEINTR) continue;
+				throw std::system_error(e, win32_error_category());
+			}
+#else
 			int r = poll(waiting.data(),waiting.size(), wait_tm);
 			if (r < 0) {
 				int e = errno;
 				if (e == EINTR) continue;
 				throw std::system_error(e,std::generic_category());
 			}
+#endif
 			lastIdx = 0;
 			now = std::chrono::system_clock::now();
 		}
@@ -107,9 +153,15 @@ Dispatcher::Task Dispatcher::getTask() {
 					waiting[idx].events = POLLIN;
 					std::unique_lock _(lk);
 					char buff[100];
-					if (::read(waiting[idx].fd, buff, 100)<0) {
-						throw std::system_error(errno, std::generic_category());
+#ifdef _WIN32
+					if (::recv(waiting[idx].fd, buff, 100,0) < 0) {
+						throw std::system_error(WSAGetLastError(), error_category());
 					}
+#else
+					if (::read(waiting[idx].fd, buff, 100)<0) {
+						throw std::system_error(errno, error_category());
+					}
+#endif
 					++lastIdx;
 					if (stopped) {
 						waiting.clear();

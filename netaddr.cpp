@@ -5,20 +5,10 @@
  *      Author: ondra
  */
 
-#include <errno.h>
-#include <unistd.h>
+#include "platform.h"
 #include <iomanip>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/un.h>
 #include <sstream>
- #include <sys/types.h>
-#include <netdb.h>
 #include "netaddr.h"
-
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <cerrno>
 
 namespace userver {
 
@@ -41,9 +31,9 @@ public:
 	using NetAddrBase<sockaddr_in>::NetAddrBase;
 
 	virtual std::string toString(bool resolve = false) const override;
-	virtual int listen() const override;
-	virtual int connect() const override;
-	virtual int bindUDP() const override;
+	virtual SocketHandle listen() const override;
+	virtual SocketHandle connect() const override;
+	virtual SocketHandle bindUDP() const override;
 	virtual std::unique_ptr<INetAddr> clone() const override {
 		return std::make_unique<NetAddrIPv4>(addr);
 	}
@@ -55,15 +45,16 @@ public:
 	using NetAddrBase<sockaddr_in6>::NetAddrBase;
 
 	virtual std::string toString(bool resolve = false) const override;
-	virtual int listen() const override;
-	virtual int connect() const override;
-	virtual int bindUDP() const override;
+	virtual SocketHandle listen() const override;
+	virtual SocketHandle connect() const override;
+	virtual SocketHandle bindUDP() const override;
 	virtual std::unique_ptr<INetAddr> clone() const override {
 		return std::make_unique<NetAddrIPv6>(addr);
 	}
 
 };
 
+#ifndef _WIN32
 class NetAddrUnix: public NetAddrBase<sockaddr_un> {
 public:
 	using NetAddrBase<sockaddr_un>::NetAddrBase;
@@ -80,10 +71,12 @@ protected:
 	int permission;
 
 };
+#endif
+
 void INetAddr::error(const std::string_view &addr, int errnr, const char *desc) {
 	std::ostringstream bld;
-	bld<<"Network error: " << strerror(errnr) << " - " << desc << " - " << addr;
-	throw std::system_error(errnr, std::generic_category(), bld.str());
+		bld << "Network error:  " << desc << " - " << addr;
+		throw std::system_error(errnr, error_category(), bld.str());
 }
 
 void INetAddr::error(const INetAddr *addr, int errnr, const char *desc) {
@@ -94,6 +87,8 @@ void INetAddr::error(const INetAddr *addr, int errnr, const char *desc) {
 NetAddrList NetAddr::fromString(const std::string_view &addr_str, const std::string_view &default_svc) {
 	std::string name;
 	std::string svc;
+
+	signal(SIGPIPE, SIG_IGN);
 
 	if (addr_str.empty()) INetAddr::error(addr_str, EINVAL, "Address can't be empty");
 	if (addr_str[0]=='[' ) {
@@ -108,10 +103,12 @@ NetAddrList NetAddr::fromString(const std::string_view &addr_str, const std::str
 			name = ipv6part;
 			svc = addr_str.substr(pos+1);
 		}
+#ifndef _WIN32
 	} else if (addr_str.substr(0,5) == "unix:") {
 		NetAddrList lst;
 		lst.push_back(NetAddr(std::make_unique<NetAddrUnix>(addr_str.substr(5))));
 		return lst;
+#endif		
 	} else {
 		auto pos = addr_str.rfind(':');
 		if (pos == addr_str.npos) {
@@ -127,7 +124,11 @@ NetAddrList NetAddr::fromString(const std::string_view &addr_str, const std::str
 
 	auto res =getaddrinfo(name.empty()?nullptr:name.c_str(), svc.c_str(), &req, &resp);
 	if (res) {
+	#ifdef _WIN32
+		INetAddr::error(addr_str, WSASYSCALLFAILURE, gai_strerrorA(res));
+	#else
 		INetAddr::error(addr_str, ENOENT, gai_strerror(res));
+	#endif
 	}
 
 	NetAddrList lst;
@@ -159,7 +160,9 @@ NetAddr& NetAddr::operator =(NetAddr &&other) {
 
 NetAddr NetAddr::fromSockAddr(const sockaddr &addr) {
 	switch (addr.sa_family) {
+#ifndef _WIN32
 	case AF_UNIX: return NetAddr(std::make_unique<NetAddrUnix>(reinterpret_cast<const sockaddr_un &>(addr)));
+#endif
 	case AF_INET: return NetAddr(std::make_unique<NetAddrIPv4>(reinterpret_cast<const sockaddr_in &>(addr)));
 	case AF_INET6: return NetAddr(std::make_unique<NetAddrIPv6>(reinterpret_cast<const sockaddr_in6 &>(addr)));
 	default: return NetAddr(std::make_unique<NetAddrBase<sockaddr> >(addr));
@@ -190,36 +193,64 @@ std::string NetAddrIPv4::toString(bool resolve) const {
 	}
 }
 
+static inline auto lastError() {
+#ifdef _WIN32
+	return WSAGetLastError();
+#else
+	return errno;
+#endif
+}
+
+SocketHandle newSocket(const INetAddr *owner, int family, int type, int proto) {
+#ifdef _WIN32
+	SOCKET sock = ::socket(family, type , proto);
+	if (sock  == INVALID_SOCKET) INetAddr::error(owner, lastError(), "socket()");
+	u_long iMode = 1;
+	if (::ioctlsocket(sock, FIONBIO, &iMode)) {
+		closesocket(sock);
+		INetAddr::error(owner, lastError(), "ioctlsocket FIONBIO");
+	}
+	return sock;
+#else
+	int sock = ::socket(family, type|SOCK_NONBLOCK|SOCK_CLOEXEC, proto);
+	if (sock < 0) INetAddr::error(owner, lastError(), "socket()");
+	return sock;
+#endif
+}
 
 int NetAddrIPv4::listen() const {
-	int sock = ::socket(AF_INET, SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC, IPPROTO_TCP);
-	if (sock < 0) error(this, errno, "socket()");
+	SocketHandle sock = newSocket(this, AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	try {
 		int flag = 1;
-		if (::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<char *>(&flag), sizeof(int))) error(this, errno, "setsockopt(SO_REUSEADDR)");
-		if (::setsockopt(sock,IPPROTO_TCP,TCP_NODELAY,reinterpret_cast<char *>(&flag),sizeof(int))) error(this, errno, "setsockopt(TCP_NODELAY)");
-		if (::bind(sock,getAddr(), getAddrLen())) error(this, errno, "bind()");
-		if (::listen(sock, SOMAXCONN)) error(this, errno, "listen()");
+#ifndef _WIN32
+		if (::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<char *>(&flag), sizeof(int))) error(this, lastError(), "setsockopt(SO_REUSEADDR)");
+#endif
+		if (::setsockopt(sock,IPPROTO_TCP,TCP_NODELAY,reinterpret_cast<char *>(&flag),sizeof(int))) error(this, lastError(), "setsockopt(TCP_NODELAY)");
+		if (::bind(sock,getAddr(), getAddrLen())) error(this, lastError(), "bind()");
+		if (::listen(sock, SOMAXCONN)) error(this, lastError(), "listen()");
 		return sock;
 	} catch (...) {
-		::close(sock);
+		closesocket(sock);
 		throw;
 	}
 }
 
 int NetAddrIPv4::connect() const {
-	int sock = ::socket(AF_INET, SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC, IPPROTO_TCP);
-	if (sock < 0) error(this, errno, "socket()");
+	SocketHandle sock = newSocket(this, AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	try {
 		int flag = 1;
-		if (::setsockopt(sock,IPPROTO_TCP,TCP_NODELAY,reinterpret_cast<char *>(&flag),sizeof(int))) error(this, errno, "setsockopt(TCP_NODELAY)");
+		if (::setsockopt(sock,IPPROTO_TCP,TCP_NODELAY,reinterpret_cast<char *>(&flag),sizeof(int))) error(this, lastError(), "setsockopt(TCP_NODELAY)");
 		if (::connect(sock, getAddr(), getAddrLen())) {
-			int err = errno;
+			int err = lastError();
+#ifdef _WIN32
+			if (err != WSAEINPROGRESS && err != WSAEWOULDBLOCK) error(this, err, "connect()");
+#else
 			if (err != EINPROGRESS && err != EWOULDBLOCK) error(this, err, "connect()");
+#endif
 		}
 		return sock;
 	} catch (...) {
-		::close(sock);
+		closesocket(sock);
 		throw;
 	}
 }
@@ -251,37 +282,42 @@ std::string NetAddrIPv6::toString(bool resolve) const {
 }
 
 int NetAddrIPv6::listen() const {
-	int sock = ::socket(AF_INET6, SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC, IPPROTO_TCP);
-	if (sock < 0) error(this, errno, "socket()");
+	SocketHandle sock = newSocket(this, AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 	try {
 		int flag = 1;
-		if (::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<char *>(&flag), sizeof(int))) error(this, errno, "setsockopt(SO_REUSEADDR)");
-		if (::setsockopt(sock,IPPROTO_TCP,TCP_NODELAY,reinterpret_cast<char *>(&flag),sizeof(int))) error(this, errno, "setsockopt(TCP_NODELAY)");
-		if (::bind(sock,getAddr(), getAddrLen())) error(this, errno, "bind()");
-		if (::listen(sock, SOMAXCONN)) error(this, errno, "listen()");
+#ifndef _WIN32
+		if (::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<char *>(&flag), sizeof(int))) error(this, lastError(), "setsockopt(SO_REUSEADDR)");
+#endif
+		if (::setsockopt(sock,IPPROTO_TCP,TCP_NODELAY,reinterpret_cast<char *>(&flag),sizeof(int))) error(this, lastError(), "setsockopt(TCP_NODELAY)");
+		if (::bind(sock,getAddr(), getAddrLen())) error(this, lastError(), "bind()");
+		if (::listen(sock, SOMAXCONN)) error(this, lastError(), "listen()");
 		return sock;
 	} catch (...) {
-		::close(sock);
+		closesocket(sock);
 		throw;
 	}
 }
 
 int NetAddrIPv6::connect() const {
-	int sock = ::socket(AF_INET, SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC, IPPROTO_TCP);
-	if (sock < 0) error(this, errno, "socket()");
+	SocketHandle sock = newSocket(this, AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 	try {
 		int flag = 1;
-		if (::setsockopt(sock,IPPROTO_TCP,TCP_NODELAY,reinterpret_cast<char *>(&flag),sizeof(int))) error(this, errno, "setsockopt(TCP_NODELAY)");
+		if (::setsockopt(sock,IPPROTO_TCP,TCP_NODELAY,reinterpret_cast<char *>(&flag),sizeof(int))) error(this, lastError(), "setsockopt(TCP_NODELAY)");
 		if (::connect(sock, getAddr(), getAddrLen())) {
-			int err = errno;
+			int err = lastError();
+#ifdef _WIN32
+			if (err != WSAEINPROGRESS && err != WSAEWOULDBLOCK) error(this, err, "connect()");
+#else
 			if (err != EINPROGRESS && err != EWOULDBLOCK) error(this, err, "connect()");
+#endif
 		}
 		return sock;
 	} catch (...) {
-		::close(sock);
+		closesocket(sock);
 		throw;
 	}
 }
+#ifndef _WIN32
 
 static sockaddr_un createUnAddress(const std::string_view &addr) {
 	sockaddr_un s;
@@ -340,64 +376,64 @@ int NetAddrUnix::listen() const {
 			unlink(addr.sun_path);
 		}
 	}
-	int sock = ::socket(AF_UNIX, SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC, 0);
-	if (sock < 0) error(this, errno, "socket()");
+	SocketHandle sock = newSocket(this, AF_UNIX, SOCK_STREAM, 0);
 	try {
-		if (::bind(sock,getAddr(), getAddrLen())) error(this, errno, "bind()");
-		if (::listen(sock, SOMAXCONN)) error(this, errno, "listen()");
+		if (::bind(sock,getAddr(), getAddrLen())) error(this, lastError(), "bind()");
+		if (::listen(sock, SOMAXCONN)) error(this, lastError(), "listen()");
 		if (permission) chmod(addr.sun_path, permission);
 		return sock;
 	} catch (...) {
-		::close(sock);
+		closesocket(sock);
 		throw;
 	}
 }
 
 int NetAddrUnix::connect() const {
-	int sock = ::socket(AF_UNIX, SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC, 0);
-	if (sock < 0) error(this, errno, "socket()");
+	SocketHandle sock = newSocket(this, AF_UNIX, SOCK_STREAM, 0);
+	if (sock < 0) error(this, lastError(), "socket()");
 	try {
 		if (::connect(sock, getAddr(), getAddrLen())) {
-			int err = errno;
+			int err = lastError();
 			if (err != EINPROGRESS && err != EWOULDBLOCK) error(this, err, "connect()");
 		}
 		return sock;
 	} catch (...) {
-		::close(sock);
+		closesocket(sock);
 		throw;
 	}
 
-}
-
-inline int NetAddrIPv4::bindUDP() const {
-	int sock = ::socket(AF_INET, SOCK_DGRAM|SOCK_NONBLOCK|SOCK_CLOEXEC, IPPROTO_UDP);
-	if (sock < 0) error(this, errno, "socket()");
-	try {
-		if (::bind(sock,getAddr(), getAddrLen())) {
-			error(this, errno, "bind()");
-		}
-		return sock;
-	} catch (...) {
-		::close(sock);
-		throw;
-	}
 }
 
 inline int NetAddrUnix::bindUDP() const {
-	error(this, errno, "Cannot use this address");
+	error(this, EINVAL, "Cannot use this address");
 	throw;
 }
 
-inline int NetAddrIPv6::bindUDP() const {
-	int sock = ::socket(AF_INET6, SOCK_DGRAM|SOCK_NONBLOCK|SOCK_CLOEXEC, IPPROTO_UDP);
-	if (sock < 0) error(this, errno, "socket()");
+#endif
+
+inline int NetAddrIPv4::bindUDP() const {
+	SocketHandle sock = newSocket(this, AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	try {
 		if (::bind(sock,getAddr(), getAddrLen())) {
-			error(this, errno, "bind()");
+			error(this, lastError(), "bind()");
 		}
 		return sock;
 	} catch (...) {
-		::close(sock);
+		closesocket(sock);
+		throw;
+	}
+}
+
+
+inline int NetAddrIPv6::bindUDP() const {
+	SocketHandle sock = newSocket(this, AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
+	try {
+		if (::bind(sock,getAddr(), getAddrLen())) {
+			error(this, lastError(), "bind()");
+		}
+		return sock;
+	} catch (...) {
+		closesocket(sock);
 		throw;
 	}
 }
