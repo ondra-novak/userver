@@ -5,10 +5,12 @@
  *      Author: ondra
  */
 
+#include <userver/init.h>
 #include "platform.h"
 #include <iomanip>
 #include <sstream>
 #include "netaddr.h"
+#include "init.h"
 
 namespace userver {
 
@@ -88,7 +90,7 @@ NetAddrList NetAddr::fromString(const std::string_view &addr_str, const std::str
 	std::string name;
 	std::string svc;
 
-	signal(SIGPIPE, SIG_IGN);
+	initNetwork();
 
 	if (addr_str.empty()) INetAddr::error(addr_str, EINVAL, "Address can't be empty");
 	if (addr_str[0]=='[' ) {
@@ -170,6 +172,7 @@ NetAddr NetAddr::fromSockAddr(const sockaddr &addr) {
 }
 
 std::string NetAddrIPv4::toString(bool resolve) const {
+	initNetwork();
 	if (resolve) {
 		char host[256];
 		char service[256];
@@ -202,6 +205,7 @@ static inline auto lastError() {
 }
 
 SocketHandle newSocket(const INetAddr *owner, int family, int type, int proto) {
+	initNetwork();
 #ifdef _WIN32
 	SOCKET sock = ::socket(family, type , proto);
 	if (sock  == INVALID_SOCKET) INetAddr::error(owner, lastError(), "socket()");

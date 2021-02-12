@@ -1,12 +1,22 @@
-#include "platform.h"
+/*
+ * init.cpp
+ *
+ *  Created on: 12. 2. 2021
+ *      Author: ondra
+ */
 
-#include "winsock.h"
+
+
+
+#include "platform.h"
 #include <stdexcept>
 
-
+#ifdef _WIN32
 #pragma comment(lib, "Ws2_32.lib")
+#endif
 
 namespace userver {
+#ifdef _WIN32
 
 	class WinSockInit {
 	public:
@@ -27,7 +37,24 @@ namespace userver {
 	};
 
 
-	void initWinsock() {
+	void initNetwork() {
 		static WinSockInit ws;
 	}
 }
+#else
+
+class OneTimeInit {
+public:
+	OneTimeInit() {
+		signal(SIGPIPE, SIG_IGN);
+	}
+};
+
+void initNetwork() {
+	static OneTimeInit oti;
+}
+
+}
+
+
+#endif

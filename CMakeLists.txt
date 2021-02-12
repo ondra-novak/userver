@@ -12,5 +12,6 @@ add_library (userver
 	async_provider.cpp
 	query_parser.cpp
 	dgramsocket.cpp
+	init.cpp
 )
 
