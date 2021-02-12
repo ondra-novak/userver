@@ -916,6 +916,7 @@ void HttpServer::listen() {
 void HttpServer::addThread() {
 	setThreadAsyncProvider(asyncProvider);
 	asyncProvider.start_thread();
+	setThreadAsyncProvider(nullptr);
 }
 
 AsyncProvider HttpServer::getAsyncProvider() {
@@ -1058,6 +1059,10 @@ bool HttpServerRequest::directoryRedir() {
 	} else {
 		return false;
 	}
+}
+
+void HttpServer::stopOnSignal() {
+	getAsyncProvider().stopOnSignal();
 }
 
 }

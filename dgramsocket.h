@@ -98,7 +98,7 @@ protected:
 	SocketHandle s;
 	std::vector<char> inputBuffer;
 	std::vector<char> addrBuffer;
-	int rcvsize;
+	int rcvsize = 0;
 
 	const AsyncResource &getReadAsync() ;
 

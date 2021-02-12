@@ -40,8 +40,8 @@ namespace userver {
 	}
 
 
-	int Socket::read(void* buffer, unsigned int size) {
-		int r = recv(s, reinterpret_cast<char *>(buffer), size, 0);
+	int Socket::read(void* buffer, std::size_t size) {
+		int r = recv(s, reinterpret_cast<char *>(buffer), static_cast<unsigned int>(size), 0);
 		if (r < 0) {
 			int err = WSAGetLastError();
 			if (err == WSAEWOULDBLOCK) {
@@ -51,7 +51,7 @@ namespace userver {
 					tm = true;
 					return 0;
 				}
-				r = recv(s, reinterpret_cast<char *>(buffer), size, 0);
+				r = recv(s, reinterpret_cast<char *>(buffer), static_cast<unsigned int>(size), 0);
 				if (r < 0) error(WSAGetLastError(), "socket read()");
 			}
 			else {
@@ -61,8 +61,8 @@ namespace userver {
 		return r;
 	}
 
-	int Socket::write(const void* buffer, unsigned int size) {
-		int r = send(s, reinterpret_cast<const char *>(buffer), size, 0);
+	int Socket::write(const void* buffer, std::size_t size) {
+		int r = send(s, reinterpret_cast<const char *>(buffer), static_cast<unsigned int>(size), 0);
 		if (r < 0) {
 			int err = WSAGetLastError();
 			if (err == WSAEWOULDBLOCK) {
@@ -72,7 +72,7 @@ namespace userver {
 					tm = true;
 					return 0;
 				}
-				r = send(s, reinterpret_cast<const char*>(buffer), size, 0);
+				r = send(s, reinterpret_cast<const char*>(buffer), static_cast<unsigned int>(size), 0);
 				if (r < 0) error(WSAGetLastError(), "socket write()");
 			}
 			else {
@@ -126,8 +126,8 @@ namespace userver {
 	Socket::Socket(SocketHandle s) :s(s) {
 	}
 
-	void Socket::read(void* buffer, unsigned int size, CallbackT<void(int)>&& fn) {
-		int r = recv(s, reinterpret_cast<char*>(buffer), size, 0);
+	void Socket::read(void* buffer, std::size_t size, CallbackT<void(int)>&& fn) {
+		int r = recv(s, reinterpret_cast<char*>(buffer), static_cast<unsigned int>(size), 0);
 		if (r < 0) {
 			int err = WSAGetLastError();
 			if (err == WSAEWOULDBLOCK) {
@@ -153,8 +153,8 @@ namespace userver {
 		}
 	}
 
-	void Socket::write(const void* buffer, unsigned int size, CallbackT<void(int)>&& fn) {
-		int r = send(s, reinterpret_cast<const char*>(buffer), size, 0);
+	void Socket::write(const void* buffer, std::size_t size, CallbackT<void(int)>&& fn) {
+		int r = send(s, reinterpret_cast<const char*>(buffer), static_cast<unsigned int>(size), 0);
 		if (r < 0) {
 			int err = WSAGetLastError();
 			if (err == WSAEWOULDBLOCK) {
@@ -204,26 +204,55 @@ namespace userver {
 	}
 
 	bool Socket::waitConnect(int tm) {
-		pollfd pfd = { s,POLLOUT,0 };
-		int r = WSAPoll(&pfd, 1, tm);
+		fd_set wrset, errset;
+		FD_ZERO(&wrset);
+		FD_ZERO(&errset);
+		FD_SET(s, &wrset);
+		FD_SET(s, &errset);
+
+		timeval tmout = { tm / 1000,(tm % 1000) * 1000 };
+		int r = select(1, nullptr, &wrset, &errset, &tmout);
+
 		if (r < 0) {
 			int e = WSAGetLastError();
-			throw std::system_error(e, win32_error_category(), "waitConnect,poll");
+			throw std::system_error(e, win32_error_category(), "waitConnect,select");
 		}
 		else if (r == 0) {
 			return false;
 		}
 		else {
-			return checkSocketState();
+			if (FD_ISSET(s, &errset)) return false;
+			return true;
 		}
 	}
 
 	void Socket::waitConnect(int tm, CallbackT<void(bool)>&& cb) {
+		auto now = std::chrono::system_clock::now();
+		auto checkTime = tm < 0 || tm > 1000 ? now + std::chrono::seconds(1) : now + std::chrono::milliseconds(tm);
 		getCurrentAsyncProvider()->runAsync(AsyncResource(AsyncResource::write, s),
-			[this, cb = std::move(cb)](bool timeouted) {
-			cb(!timeouted && checkSocketState());
-		}, tm < 0 ? std::chrono::system_clock::time_point::max()
-			: std::chrono::system_clock::now() + std::chrono::milliseconds(tm));
+			[this, cb = std::move(cb), tm](bool timeouted) mutable {
+
+
+			if (!timeouted) {
+				cb(checkSocketState());
+			}
+			else {
+				fd_set errset;
+				FD_ZERO(&errset);
+				FD_SET(s, &errset);
+				timeval tmout = { 0,0 };
+				int r = select(1, nullptr, nullptr, &errset, &tmout);
+				if (FD_ISSET(s, &errset)) {
+					cb(false);
+				}
+				else if (tm < 1000) {
+					cb(false);
+				}
+				else {
+					waitConnect(tm - 1000, std::move(cb));
+				}
+			}
+		}, checkTime);
 	}
 
 }

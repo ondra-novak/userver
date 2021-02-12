@@ -4,6 +4,9 @@
  *  Created on: 12. 1. 2021
  *      Author: ondra
  */
+#ifndef SRC_USERVER_DISPATCHER_H_
+#define SRC_USERVER_DISPATCHER_H_
+
 
 #include "platform.h"
 #include <atomic>
@@ -54,3 +57,6 @@ protected:
 
 
 }
+
+
+#endif

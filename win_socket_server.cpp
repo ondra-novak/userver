@@ -5,10 +5,11 @@
  *      Author: ondra
  */
 
+#include "platform.h"
+
 #include "socket_server.h"
 #include "win_category.h"
 
-#include "platform.h"
 #include <cstdlib>
 #include <chrono>
 #include <mutex>
@@ -46,14 +47,14 @@ namespace userver {
 
 	std::optional<Socket> SocketServer::waitAccept() {
 		sockaddr_storage stor;
-		int z = waitForSocket(stor);
+		SocketHandle z = waitForSocket(stor);
 		if (z < 0) return std::optional<Socket>();
 		else return Socket(z);
 	}
 
 	std::optional<SocketServer::AcceptInfo> SocketServer::waitAcceptGetPeer() {
 		sockaddr_storage stor;
-		int z = waitForSocket(stor);
+		SocketHandle z = waitForSocket(stor);
 		if (z < 0) return std::optional<SocketServer::AcceptInfo>();
 		else return SocketServer::AcceptInfo{
 			Socket(z), NetAddr::fromSockAddr(reinterpret_cast<sockaddr&>(stor))
@@ -71,7 +72,7 @@ namespace userver {
 				++idx;
 			}
 		}
-		int r = WSAPoll(pfds, fds.size(), -1);
+		int r = WSAPoll(pfds, static_cast<ULONG>(fds.size()), -1);
 		if (r < 0) {
 			if (exit) return -1;
 			int e = WSAGetLastError();
@@ -104,9 +105,9 @@ namespace userver {
 		AsyncCallback curCallback;
 		std::vector<SocketHandle> charged;
 
-		bool isCharged(int i) const;
-		void uncharge(int i);
-		void charge(int i);
+		bool isCharged(SocketHandle i) const;
+		void uncharge(SocketHandle i);
+		void charge(SocketHandle i);
 	};
 
 	bool SocketServer::AsyncAcceptor::asyncAccept(std::shared_ptr<AsyncAcceptor> me, AsyncCallback&& callback, const std::vector<SocketHandle>& fds) {
@@ -114,7 +115,7 @@ namespace userver {
 		auto ap = getCurrentAsyncProvider();
 		if (curCallback != nullptr) return false;
 		curCallback = std::move(callback);
-		for (int i : fds) {
+		for (SocketHandle i : fds) {
 			if (!isCharged(i)) {
 				ap->runAsync(AsyncResource(AsyncResource::read, i), [me, i](bool) {
 					std::unique_lock _(me->lk);
@@ -167,16 +168,16 @@ namespace userver {
 		return true;
 	}
 
-	inline bool SocketServer::AsyncAcceptor::isCharged(int i) const {
+	inline bool SocketServer::AsyncAcceptor::isCharged(SocketHandle i) const {
 		return std::find(charged.begin(), charged.end(), i) != charged.end();
 	}
 
-	inline void SocketServer::AsyncAcceptor::uncharge(int i) {
+	inline void SocketServer::AsyncAcceptor::uncharge(SocketHandle i) {
 		auto x = std::remove(charged.begin(), charged.end(), i);
 		charged.erase(x, charged.end());
 	}
 
-	inline void SocketServer::AsyncAcceptor::charge(int i) {
+	inline void SocketServer::AsyncAcceptor::charge(SocketHandle i) {
 		charged.push_back(i);
 	}
 

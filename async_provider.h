@@ -51,7 +51,6 @@ public:
 	///Returns true, if async provider has been stopped
 	virtual bool stopped() const = 0;
 
-
 	virtual ~IAsyncProvider() {}
 
 
@@ -106,6 +105,12 @@ public:
 	bool stopped() const {
 		return get()->stopped();
 	}
+	///Installs a signal handler
+	/** This allows to stop asynchronous provider on signal SIGTERM and SIGINT
+	* Only one asynchronous provider can has this functionality. If this function
+	* called on different provider, it replaces current registration
+	*/
+	void stopOnSignal();
 };
 
 enum class AsyncProviderType {

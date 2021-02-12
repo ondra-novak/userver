@@ -40,7 +40,7 @@ static void error(int errnr, const char *desc) {
 }
 
 
-int Socket::read(void *buffer, unsigned int size) {
+int Socket::read(void *buffer, std::size_t size) {
 	int r = recv(s, buffer,size,0);
 	if (r < 0) {
 		int err = errno;
@@ -60,7 +60,7 @@ int Socket::read(void *buffer, unsigned int size) {
 	return r;
 }
 
-int Socket::write(const void *buffer, unsigned int size) {
+int Socket::write(const void *buffer, std::size_t size) {
 	int r = send(s, buffer, size,0);
 	if (r < 0) {
 		int err = errno;
@@ -124,7 +124,7 @@ bool Socket::timeouted() const {
 Socket::Socket(SocketHandle s):s(s) {
 }
 
-void Socket::read(void *buffer, unsigned int size, CallbackT<void(int)> &&fn) {
+void Socket::read(void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
 	int r = recv(s, buffer,size,0);
 	if (r < 0) {
 		int err = errno;
@@ -148,7 +148,7 @@ void Socket::read(void *buffer, unsigned int size, CallbackT<void(int)> &&fn) {
 	}
 }
 
-void Socket::write(const void *buffer, unsigned int size, CallbackT<void(int)> &&fn) {
+void Socket::write(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
 	int r = send(s, buffer, size,0);
 	if (r < 0) {
 		int err = errno;

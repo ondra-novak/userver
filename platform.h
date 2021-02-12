@@ -1,4 +1,6 @@
 #pragma once
+#ifndef USERVER_PLATFORM_PCH
+#define USERVER_PLATFORM_PCH
 
 #ifdef _WIN32 
 
@@ -18,6 +20,7 @@ using socklen_t = int;
 #define MSG_DONTWAIT 0
 #undef DELETE
 
+
 #else
 
 #include <errno.h>
@@ -34,5 +37,5 @@ namespace userver {
 }
 
 #endif
-
+#endif
 

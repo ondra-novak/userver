@@ -301,6 +301,19 @@ public:
 	 */
 	void stop();
 
+	///Stops server on signal handler
+	/**
+	 * Installs signal handler on SIGINT and SIGTERM which, when the signal is triggered,
+	 * stop the server and terminates all threads. This also allows to main thread
+	 * exit from the function addThread()
+	 *
+	 * @note only one server can have this feature. You should use this on server which
+	 * where the main thread is involved
+	 *
+	 * @note it is good idea to call stop() eventually even if this function is involved
+	 */
+	void stopOnSignal();
+
 	///Add thread to pool
 	/** Thread which called this function becomes the pool thread. Note that thread is not joined
 	 * during stop

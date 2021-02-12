@@ -23,7 +23,7 @@ public:
 	 *
 	 * @note read is blocking, you need to use async version to perform nonblocking read
 	 */
-	virtual int read(void *buffer, unsigned int size) = 0;
+	virtual int read(void *buffer, std::size_t size) = 0;
 	///Write the buffer
 	/**
 	 *
@@ -31,7 +31,7 @@ public:
 	 * @param size size of the buffer
 	 * @return returns count of written bytes. Returns 0 if write timeouted
 	 */
-	virtual int write(const void *buffer, unsigned int size) = 0;
+	virtual int write(const void *buffer, std::size_t size) = 0;
 
 	///Read asynchronously
 	/**
@@ -43,9 +43,9 @@ public:
 	 *
 	 * @note You must ensure, that buffer is valid during waiting for completion.
 	 */
-	virtual void read(void *buffer, unsigned int size, CallbackT<void(int)> &&fn) = 0;
+	virtual void read(void *buffer, std::size_t size, CallbackT<void(int)> &&fn) = 0;
 	///Write asynchronously
-	virtual void write(const void *buffer, unsigned int size, CallbackT<void(int)> &&fn) = 0;
+	virtual void write(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn) = 0;
 
 	///Close the output
 	/** when output is closed, futher writes are rejected. The other side receives
