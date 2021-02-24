@@ -23,6 +23,13 @@ struct sockaddr_storage;
 using socklen_t = int;
 #else
 
+#include <unistd.h>
+namespace userver {
+	using SocketHandle = int;
+}
+
+struct sockaddr;
+struct sockaddr_storage;
 
 #endif
 

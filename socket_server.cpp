@@ -94,7 +94,7 @@ SocketHandle SocketServer::waitForSocket(sockaddr_storage &sin) {
 		if (exit) return INVALID_SOCKET_HANDLE;
 		int e = WSAGetLastError();
 #else
-	int r = poll(pfds, fds.size(), -1);
+	int r = poll(pfds.data(), pfds.size(), -1);
 	if (r<0) {
 		if (exit) return INVALID_SOCKET_HANDLE;
 		int e =errno;
