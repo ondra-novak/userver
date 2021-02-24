@@ -5,6 +5,8 @@
  *      Author: ondra
  */
 
+#ifndef _WIN32
+
 #include <unistd.h>
 #include <fcntl.h>
 #include <cerrno>
@@ -219,4 +221,6 @@ int Dispatcher_EPoll::getTmFd() const {
 }
 
 }
+
+#endif
 

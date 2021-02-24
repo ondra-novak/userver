@@ -727,7 +727,7 @@ bool HttpServerRequest::sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, co
 		return false;
 	} else {
 		file->seekg(0,std::ios::end);
-		std::size_t sz = file->tellg();
+		auto sz = file->tellg();
 		if (sz == 0) {
 			reqptr->sendErrorPage(204);
 		} else {
@@ -737,7 +737,7 @@ bool HttpServerRequest::sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, co
 				reqptr->sendErrorPage(403);
 			} else{
 				file->putback(p);
-				reqptr->set(CONTENT_LENGTH,sz);
+				reqptr->set(CONTENT_LENGTH,static_cast<std::size_t>(sz));
 				Stream out = reqptr->send();
 
 				sendFileAsync(reqptr, file, out);
@@ -755,9 +755,9 @@ void HttpServerRequest::sendFileAsync(std::unique_ptr<HttpServerRequest> &reqptr
 	char buff[10000];
 	while (!(!(*in))) {
 		in->read(buff,sizeof(buff));
-		std::size_t cnt = in->gcount();
+		auto cnt = in->gcount();
 		if (cnt) {
-			if (out.writeNB(std::string_view(buff, cnt))) {
+			if (out.writeNB(std::string_view(buff, static_cast<std::size_t>(cnt)))) {
 				out.flushAsync([reqptr = std::move(reqptr),  in = std::move(in)](Stream &out, bool ok) mutable {
 					if (ok) {
 						sendFileAsync(reqptr, in, out);
