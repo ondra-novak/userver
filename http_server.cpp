@@ -514,16 +514,9 @@ Stream HttpServerRequest::send() {
 		set("Connection","close");
 	}
 	if (!has_date) {
-		 char buf[256];
-		 time_t now = time(0);
-		 struct tm tm;
-#ifdef _WIN32
-		 gmtime_s(&tm, &now);
-#else 
-		 gmtime_r(&now, &tm);
-#endif
-		 strftime(buf, sizeof buf, "%a, %d %b %Y %H:%M:%S %Z", &tm);
-		 set("Date", buf);
+		httpDate(time(0), [&](std::string_view d){
+			set("Date", d);
+		});
 	}
 
 	if (!has_server) {
@@ -781,13 +774,13 @@ void HttpServerMapper::addPath(const std::string_view &path, Handler &&handler) 
 	else mapping->pathMapping.emplace(std::string(path), std::move(handler));
 }
 
-void HttpServerMapper::serve(Stream &&stream) {
+/*void HttpServerMapper::serve(Stream &&stream) {
 	auto req = std::make_unique<HttpServerRequest>();
 	req->init(std::move(stream));
 	if (!execHandlerByHost(req)) {
 		req->sendErrorPage(404);
 	}
-}
+}*/
 
 bool HttpServerMapper::execHandler(PHttpServerRequest &req, const std::string_view &vpath) {
 	try {
@@ -956,7 +949,8 @@ void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
 			preq->initAsync(std::move(s), [req = std::move(req), this](bool v) mutable {
 				if (v) {
 					req->setKeepAliveCallback([this](Stream &s, HttpServerRequest &req){
-						PHttpServerRequest newreq = std::make_unique<HttpServerRequest>();
+						PHttpServerRequest newreq = createRequest();
+						reuse_buffers(req,*newreq);
 						newreq->reuse_buffers(req);
 						beginRequest(std::move(s), std::move(newreq));
 					});
@@ -974,13 +968,21 @@ void HttpServerRequest::log2() {
 	logBuffer.clear();
 }
 
+PHttpServerRequest HttpServer::createRequest() {
+	return std::make_unique<HttpServerRequest>();
+}
+
+void HttpServer::reuse_buffers(HttpServerRequest &old_req, HttpServerRequest &new_req) {
+	new_req.reuse_buffers(old_req);
+}
+
 void HttpServer::process(Stream &&s) {
 	if (getCurrentAsyncProvider() != asyncProvider) {
 		asyncProvider.runAsync([s = std::move(s),this]() mutable {
 			process(std::move(s));
 		});
 	} else {
-		PHttpServerRequest req = std::make_unique<HttpServerRequest>();
+		PHttpServerRequest req = createRequest();
 		beginRequest(std::move(s), std::move(req));
 	}
 }

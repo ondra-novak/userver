@@ -519,8 +519,12 @@ inline void LimitedStream<SS>::flush() {
 
 template<typename SS>
 inline LimitedStream<SS>::~LimitedStream() {
-	closeOutput();
-	closeInput();
+	try {
+		closeOutput();
+		closeInput();
+	} catch (...) {
+
+	}
 }
 
 template<typename SS>

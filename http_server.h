@@ -249,7 +249,7 @@ public:
 	using Handler = CallbackT<bool(PHttpServerRequest &, const std::string_view &)>;
 
 	void addPath(const std::string_view &path, Handler &&handler);
-	void serve(Stream &&stream);
+//	void serve(Stream &&stream);
 
 	bool execHandler(PHttpServerRequest &req, const std::string_view &vpath);
 	///Automatically detect prefix on given host
@@ -363,6 +363,17 @@ public:
 	 */
 	void process(Stream &&s);
 
+	///Called to create request
+	/** You can override this function if you need customize request object */
+	virtual PHttpServerRequest createRequest();
+
+	///Called during keep alive, to reuse requests buffers
+	/**
+	 * If you override this method, then you need to call parent implementation
+	 * @param old_req old request
+	 * @param new_req new request
+	 */
+	virtual void reuse_buffers(HttpServerRequest &old_req, HttpServerRequest &new_req);
 
 protected:
 	std::vector<std::thread> threads;

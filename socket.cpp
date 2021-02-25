@@ -45,9 +45,7 @@ int Socket::read(void *buffer, std::size_t size) {
 	if (r < 0) {
 		int err = WSAGetLastError();
 		if (err == WSAEWOULDBLOCK) {
-			pollfd pfd = { s, POLLIN, 0 };
-			int r = WSAPoll(&pfd, 1, readtm);
-			if (r <= 0) {
+			if (!waitForRead(readtm)) {
 				tm = true;
 				return 0;
 			}
@@ -64,9 +62,7 @@ return r;
 	if (r < 0) {
 		int err = errno;
 		if (err == EWOULDBLOCK) {
-			pollfd pfd = {s, POLLIN, 0};
-			int r = poll(&pfd, 1, readtm);
-			if (r <= 0) {
+			if (!waitForRead(readtm)) {
 				tm = true;
 				return 0;
 			}
@@ -86,9 +82,7 @@ int Socket::write(const void *buffer, std::size_t size) {
 	if (r < 0) {
 		int err = WSAGetLastError();
 		if (err == WSAEWOULDBLOCK) {
-			pollfd pfd = { s, POLLOUT, 0 };
-			int r = WSAPoll(&pfd, 1, writetm);
-			if (r <= 0) {
+			if (!waitForWrite(writetm)) {
 				tm = true;
 				return 0;
 			}
@@ -105,9 +99,7 @@ int Socket::write(const void *buffer, std::size_t size) {
 	if (r < 0) {
 		int err = errno;
 		if (err == EWOULDBLOCK) {
-			pollfd pfd = {s, POLLOUT, 0};
-			int r = poll(&pfd, 1, writetm);
-			if (r <= 0) {
+			if (!waitForWrite(writetm)) {
 				tm = true;
 				return 0;
 			}
@@ -330,6 +322,39 @@ void Socket::waitConnect(int tm, CallbackT<void(bool)> &&cb)  {
 				cb(!timeouted && checkSocketState());
 			}, tm<0?std::chrono::system_clock::time_point::max()
 					:std::chrono::system_clock::now()+std::chrono::milliseconds(tm));
+#endif
+}
+
+bool Socket::waitForRead(int tm) const {
+#ifdef _WIN32
+	pollfd pfd = { s, POLLIN, 0 };
+	int r = WSAPoll(&pfd, 1, tm);
+	return r>0;
+#else
+	pollfd pfd = {s, POLLIN, 0};
+	int r = poll(&pfd, 1, tm);
+	if (r < 0) {
+		int err = errno;
+		if (err == EINTR) return waitForRead(tm);
+	}
+	return r>0;
+#endif
+}
+
+
+bool Socket::waitForWrite(int tm) const {
+#ifdef _WIN32
+	pollfd pfd = { s, POLLOUT, 0 };
+	int r = WSAPoll(&pfd, 1, tm);
+	return r>0;
+#else
+	pollfd pfd = {s, POLLOUT, 0};
+	int r = poll(&pfd, 1, tm);
+	if (r < 0) {
+		int err = errno;
+		if (err == EINTR) return waitForRead(tm);
+	}
+	return r>0;
 #endif
 }
 

@@ -33,6 +33,8 @@ public:
 
 	std::string_view getPath() const;
 
+	static void urlDecode(const std::string_view &src, std::string &out);
+
 protected:
 	ParamMap pmap;
 	std::string_view path;

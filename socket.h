@@ -43,6 +43,8 @@ public:
 	virtual bool waitConnect(int tm) override;
 	virtual void waitConnect(int tm, CallbackT<void(bool)> &&cb) override;;
 
+	bool waitForRead(int tm) const;
+	bool waitForWrite(int tm) const;
 
 	///Connect the socket
 	/**
@@ -50,6 +52,8 @@ public:
 	 * @return socket in connection state. You need to call waitConnect()
 	 */
 	static Socket connect(const NetAddr &addr);
+
+	SocketHandle getHandle() const {return s;}
 
 protected:
 	SocketHandle s = -1;

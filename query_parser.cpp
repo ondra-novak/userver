@@ -171,5 +171,24 @@ bool QueryParser::orderItems(const Item& a, const Item& b) {
 	return a.first < b.first;
 }
 
+void QueryParser::urlDecode(const std::string_view &src, std::string &out) {
+	int state = 0;
+	int numb = 0;
+	for (char c: src) {
+		switch (state) {
+		case 0: if (c == '+') out.push_back(' ');
+				else if (c == '%') {state = 1; numb = 0;}
+				else out.push_back(c);
+				break;
+		case 1: numb = fromHexDigit(c) * 16;
+				state = 2;
+				break;
+		case 2: numb = fromHexDigit(c) + numb;
+				out.push_back(static_cast<char>(numb));
+				state = 0;
+		}
+	}
+}
+
 }
 

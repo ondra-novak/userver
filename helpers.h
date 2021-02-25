@@ -13,6 +13,7 @@
 #include <string_view>
 #include <stdexcept>
 #include <cctype>
+#include <ctime>
 
 namespace userver {
 
@@ -136,6 +137,18 @@ inline void trim(std::string_view &x) {
 	while (!x.empty() && std::isspace(x[x.length()-1])) x = x.substr(0, x.length()-1);
 }
 
+template<typename Fn>
+inline void httpDate(std::time_t tpoint, Fn &&fn) {
+	 char buf[256];
+	 struct tm tm;
+#ifdef _WIN32
+	 gmtime_s(&tm, &tpoint);
+#else
+	 gmtime_r(&tpoint, &tm);
+#endif
+	 auto sz = std::strftime(buf, sizeof buf, "%a, %d %b %Y %H:%M:%S %Z", &tm);
+	 fn(std::string_view(buf,sz));
+}
 
 }
 
