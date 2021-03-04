@@ -94,6 +94,7 @@ inline void AsyncProviderImpl::runAsync(const AsyncResource &res,
 }
 
 inline bool AsyncProviderImpl::yield() {
+	rethrowStoredException();
 	IDispatcher *selDisp;
 	std::unique_lock _(lock);
 	wt.wait(_,[&]{
@@ -110,6 +111,7 @@ inline bool AsyncProviderImpl::yield() {
 		_.unlock();
 		if (task.valid()) {
 			task.cb(task.timeouted);
+			rethrowStoredException();
 			return true;
 		} else {
 			return false;
@@ -213,6 +215,25 @@ void AsyncProvider::stopOnSignal() {
 
 		signal(SIGINT, &stopServer);
 		signal(SIGTERM, &stopServer);
+	}
+}
+
+thread_local std::queue<std::exception_ptr> storedExceptions;
+
+void storeException() {
+	auto e = std::current_exception();
+	if (e != nullptr) {
+		storedExceptions.push(std::move(e));
+		if (storedExceptions.size()>4) storedExceptions.pop();
+	}
+}
+
+void rethrowStoredException() {
+	if (!storedExceptions.empty()) {
+		std::exception_ptr e = std::move(storedExceptions.front());
+		storedExceptions.pop();
+		std::rethrow_exception(e);
+
 	}
 }
 

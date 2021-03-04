@@ -877,9 +877,16 @@ void HttpServer::start(NetAddrList listenSockets, unsigned int threads, unsigned
 	socketServer.emplace(listenSockets);
 	AsyncProvider a = createAsyncProvider(dispatchers);
 	for (unsigned int i = 0; i < threads; i++) {
-		this->threads.emplace_back([a]() mutable {
+		this->threads.emplace_back([a, this]() mutable {
 			setThreadAsyncProvider(a);
-			a.start_thread();
+			while (true) {
+				try {
+					a.start_thread();
+					return;
+				} catch (...) {
+					unhandled();
+				}
+			}
 		});
 	}
 	asyncProvider = a;
@@ -906,10 +913,19 @@ void HttpServer::listen() {
 	});
 }
 
+
+
+
 void HttpServer::addThread() {
 	setThreadAsyncProvider(asyncProvider);
-	asyncProvider.start_thread();
-	setThreadAsyncProvider(nullptr);
+	while (true) {
+		try {
+			asyncProvider.start_thread();
+			setThreadAsyncProvider(nullptr);
+		} catch (...) {
+			unhandled();
+		}
+	}
 }
 
 AsyncProvider HttpServer::getAsyncProvider() {
@@ -939,6 +955,19 @@ void HttpServer::log(const HttpServerRequest &, const std::string_view &msg) {
 	std::lock_guard _(lock);
 	buildLogMsg(std::cout, msg);
 }
+
+void HttpServer::unhandled() {
+	try {
+		throw;
+	} catch (const std::exception &e) {
+		std::lock_guard _(lock);
+		std::cerr << "HTTPServer Unhandled exception: " << e.what() << std::endl;
+	} catch (...) {
+		std::lock_guard _(lock);
+		std::cerr << "HTTPServer Unhandled exception: (unknown exception) " << std::endl;
+	}
+}
+
 
 void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
 	req->setLogger(logger.get());

@@ -344,6 +344,16 @@ public:
 	 * @param msg message logged.
 	 */
 	virtual void log(const HttpServerRequest &req, const std::string_view &msg);
+
+	///Overridable
+	/**
+	 * Called when unhandled exception is detected;
+	 *
+	 * @note function has no arguments. Function is called inside catch handler, so you can call try-throw-catch
+	 *
+	 * @note Default implementations sends what() message to the std.error.
+	 */
+	virtual void unhandled();
 	///Allows to catch special connections before they are processed as HTTP request
 	/**
 	 * @param s stream containing new connection

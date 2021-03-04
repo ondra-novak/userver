@@ -133,6 +133,14 @@ void setThreadAsyncProvider(AsyncProvider aprovider);
 
 AsyncProvider getCurrentAsyncProvider();
 
+///Store current exception - can be rethrow later
+/** useful to store exceptions caught in destructor */
+void storeException();
+
+///Rethrows stored exception
+/** rethrows any stored exception */
+void rethrowStoredException();
+
 }
 
 #endif /* SRC_MINISERVER_ASYNC_PROVIDER_H_ */
