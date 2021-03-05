@@ -922,6 +922,7 @@ void HttpServer::addThread() {
 		try {
 			asyncProvider.start_thread();
 			setThreadAsyncProvider(nullptr);
+			return;
 		} catch (...) {
 			unhandled();
 		}
