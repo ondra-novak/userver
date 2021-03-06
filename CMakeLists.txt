@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 2.8) 
 
-add_library (userver 
-	netaddr.cpp 
+set(userver_sources 	netaddr.cpp 
 	socket.cpp 
 	stream.cpp 
 	socket_server.cpp 
@@ -13,9 +12,16 @@ add_library (userver
 	query_parser.cpp
 	dgramsocket.cpp
 	init.cpp
-#	ssl.cpp
-#	ssl_socket.cpp
-#	ssl_exception.cpp
 	static_webserver.cpp
 )
+
+if(NOT DEFINED USERVER_NO_SSL)
+	set(userver_sources ${userver_sources}	
+		ssl.cpp 
+		ssl_socket.cpp
+		ssl_exception.cpp)
+endif()
+	
+
+add_library (userver ${userver_sources}) 
 
