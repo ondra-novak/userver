@@ -13,9 +13,9 @@ add_library (userver
 	query_parser.cpp
 	dgramsocket.cpp
 	init.cpp
-	ssl.cpp
-	ssl_socket.cpp
-	ssl_exception.cpp
+#	ssl.cpp
+#	ssl_socket.cpp
+#	ssl_exception.cpp
 	static_webserver.cpp
 )
 

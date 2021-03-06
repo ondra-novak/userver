@@ -8,8 +8,22 @@
 #ifndef SRC_USERVER_STATIC_WEBSERVER_H_
 #define SRC_USERVER_STATIC_WEBSERVER_H_
 
-#include <filesystem>
+
 #include "http_server.h"
+
+#ifdef __GNUC__
+#if __GNUC__ < 8
+#include <experimental/filesystem>
+namespace std {
+	using namespace experimental;
+}
+#else
+#include <filesystem>
+#endif
+#else
+#include <filesystem>
+#endif
+
 
 namespace userver {
 

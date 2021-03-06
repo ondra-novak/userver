@@ -11,11 +11,24 @@
 #include <algorithm>
 #include <atomic>
 #include <sstream>
-#include <filesystem>
 #include <fstream>
 
 #include "helpers.h"
 #include "socket_server.h"
+
+#ifdef __GNUC__
+#if __GNUC__ < 8
+#include <experimental/filesystem>
+namespace std {
+	using namespace experimental;
+}
+#else
+#include <filesystem>
+#endif
+#else
+#include <filesystem>
+#endif
+
 
 namespace userver {
 
