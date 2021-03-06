@@ -827,38 +827,70 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 	std::shared_lock _(mapping->shrmux);
 	auto iter = mapping->hostMapping.find(host);
 	auto iend = mapping->hostMapping.end();
-	if (iter != iend) prefix = iter->second;
-
-	if (vpath == "/" && req->getMethod() == "DELETE") {//special uri - clear mapping
-		if (iter != iend) {
+	if (iter == iend) {
+		if (execHandler(req, vpath)) {
 			_.unlock();
 			std::unique_lock __(mapping->shrmux);
-			mapping->hostMapping.erase(iter);
-		}
-		req->sendErrorPage(202);
-		return true;
-	}
-
-	auto plen = prefix.length();
-	if (vpath.substr(0,plen) == prefix
-		&& vpath.length() > plen
-		&& vpath[plen] == '/'
-		&& execHandler(req, vpath.substr(plen))) {
-			return true;
-	}
-
-	auto q = vpath.find('?');
-	auto p = vpath.find('/',1);
-	while (p < q) {
-		prefix = vpath.substr(0, p);
-		if (iter != iend && prefix.length() > plen) break;
-		if (execHandler(req, vpath.substr(p))) {
-			_.unlock();
-			std::unique_lock __(mapping->shrmux);
-			mapping->hostMapping[host] = prefix;
+			mapping->hostMapping.emplace(std::move(host), std::move(vpathbuff));
 			return true;
 		}
-		p = vpath.find('/',p+1);
+
+		auto q = vpath.find('?');
+		auto p = vpath.find('/',1);
+		while (p<q) {
+			prefix = vpath.substr(0, p);
+			if (execHandler(req, vpath.substr(p))) {
+				_.unlock();
+				std::unique_lock __(mapping->shrmux);
+				mapping->hostMapping[host] = prefix;
+				return true;
+			}
+			p = vpath.find('/',p+1);
+		}
+		if (req->directoryRedir()) return true;
+
+	} else {
+		prefix = iter->second;
+
+		if (vpath == "/" && req->getMethod() == "DELETE" && !req->isBodyAvailable()) {//special uri - clear mapping
+			if (iter != iend) {
+				_.unlock();
+				std::unique_lock __(mapping->shrmux);
+				mapping->hostMapping.erase(iter);
+			}
+			req->sendErrorPage(202);
+			return true;
+		}
+
+		auto plen = prefix.length();
+		if (vpath.length() > plen
+			&& vpath.substr(0,plen) == prefix
+			&& vpath[plen] == '/'
+			&& execHandler(req, vpath.substr(plen))) {
+				return true;
+		}
+		if (vpath == prefix) {
+			if (req->directoryRedir()) return true;
+		}
+
+		while (!prefix.empty()) {
+			auto c = prefix.rfind('/');
+			if (c != prefix.npos) {
+				prefix = prefix.substr(0,c);
+			} else {
+				prefix = std::string_view();
+			}
+			auto plen = prefix.length();
+			if (vpath.length() > plen
+				&& vpath.substr(0,plen) == prefix
+				&& vpath[plen] == '/'
+				&& execHandler(req, vpath.substr(plen))) {
+					_.unlock();
+					std::unique_lock __(mapping->shrmux);
+					iter->second = prefix;
+					return true;
+			}
+		}
 	}
 	return false;
 }
