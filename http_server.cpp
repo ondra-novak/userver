@@ -660,7 +660,7 @@ static std::pair<std::string_view, std::string_view> mimeTypes[] = {
        {"mov","video/quicktime"},
 
        // adobe
-       {"pdf","application/pdf"},
+       {"pdf","application/pdf"}	,
        {"psd","image/vnd.adobe.photoshop"},
        {"ai","application/postscript"},
        {"eps","application/postscript"},
@@ -844,7 +844,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 		if (execHandler(req, vpath)) {
 			_.unlock();
 			std::unique_lock __(mapping->shrmux);
-			mapping->hostMapping.emplace(std::move(host), std::move(vpathbuff));
+			mapping->hostMapping.emplace(std::move(host), "");
 			return true;
 		}
 
@@ -1140,6 +1140,58 @@ bool HttpServerRequest::directoryRedir() {
 
 void HttpServer::stopOnSignal() {
 	getAsyncProvider().stopOnSignal();
+}
+
+bool HttpServerRequest::isGET() const {
+	return getMethod() == "GET" || getMethod() == "HEAD";
+}
+
+bool HttpServerRequest::isPOST() const {
+	return getMethod() == "POST";
+}
+
+bool HttpServerRequest::isPUT() const {
+	return getMethod() == "PUT";
+}
+
+bool HttpServerRequest::isDELETE() const {
+	return getMethod() == "DELETE";
+}
+
+bool HttpServerRequest::isOPTIONS() const {
+	return getMethod() == "OPTIONS";
+}
+
+bool HttpServerRequest::isHEAD() const {
+	return getMethod() == "HEAD";
+}
+
+bool HttpServerRequest::allowMethods(std::initializer_list<std::string_view> methods) {
+	std::size_t cnt;
+	for (const auto &x: methods) {
+		if (HeaderValue::iequal(method,x)) return true;
+		cnt += x.length()+2;
+	}
+	std::string value;
+	value.reserve(cnt);
+	auto iter = methods.begin();
+	auto end = methods.end();
+	if (iter == end) {
+		sendErrorPage(404);
+		return false;
+	} else {
+		value.append(*iter);
+		++iter;
+		while (iter != end) {
+			value.append(", ");
+			value.append(*iter);
+			++iter;
+		}
+		std::transform(value.begin(), value.end(), value.begin(), [](int c){return (char)std::toupper(c);});
+		set("Allow",value);
+		sendErrorPage(405);
+		return false;
+	}
 }
 
 }

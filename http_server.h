@@ -64,6 +64,15 @@ public:
 	///Returns true, if successfully parsed, or false if parse error
 	bool isValid();
 
+	bool isGET() const;
+	bool isPOST() const;
+	bool isPUT() const;
+	bool isDELETE() const;
+	bool isOPTIONS() const;
+	bool isHEAD() const;
+	bool allowMethods(std::initializer_list<std::string_view> methods);
+
+
 	HeaderValue get(const std::string_view &item) const;
 	std::string_view getMethod() const;
 	std::string_view getURI()  const;
