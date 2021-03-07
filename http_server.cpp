@@ -677,6 +677,28 @@ static std::pair<std::string_view, std::string_view> mimeTypes[] = {
        {"ods","application/vnd.oasis.opendocument.spreadsheet"}
 };
 
+std::string_view HttpServerRequest::contentTypeFromExtension(std::string_view ext) {
+	std::string_view content_type;
+
+	if (ext.length() > 1) {
+		if (ext[0] == '.') ext = ext.substr(1);
+		for (auto &&itm : mimeTypes) {
+			if (itm.first == ext) {
+				content_type = itm.second;
+				break;
+			}
+		}
+	}
+	if (content_type.empty()) {
+		content_type ="application/octet-stream";
+	}
+	return content_type;
+}
+
+void HttpServerRequest::setContentTypeFromExt(std::string_view ext) {
+	setContentType(contentTypeFromExtension(ext));
+}
+
 bool HttpServerRequest::sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, const std::string_view &pathname) {
 	using namespace std::filesystem;
 	try {
@@ -710,23 +732,7 @@ bool HttpServerRequest::sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, co
 		reqptr->set("ETag", curEtag);
 	}
 	if (!reqptr->has_content_type) {
-		std::string_view content_type;
-
-		auto ext = p.extension().string();
-		if (ext.length() > 1) {
-			std::string_view exte = std::string_view(ext).substr(1);
-			for (auto &&itm : mimeTypes) {
-				if (itm.first == exte) {
-					content_type = itm.second;
-					break;
-				}
-			}
-		}
-		if (content_type.empty()) {
-			content_type ="application/octet-stream";
-		}
-
-		reqptr->set(CONTENT_TYPE, content_type);
+		reqptr->setContentTypeFromExt(p.extension().string());
 	}
 	std::unique_ptr<std::istream> file (std::make_unique<std::fstream>(p, std::ios::binary | std::ios::in ));
 	if (!(*file)) {

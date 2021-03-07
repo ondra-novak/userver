@@ -189,6 +189,10 @@ public:
 	 */
 	bool directoryRedir();
 
+	static std::string_view contentTypeFromExtension(std::string_view extension);
+
+	void setContentTypeFromExt(std::string_view ext);
+
 protected:
 
 	bool parse();
