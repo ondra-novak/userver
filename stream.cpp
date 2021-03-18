@@ -154,4 +154,9 @@ std::size_t SocketStream::getOutputBufferSize() const {
 	return wrbufflimit;
 }
 
+void SocketStream::clearTimeout() {
+	sock->clearTimeout();
+	eof = false;
+}
+
 }

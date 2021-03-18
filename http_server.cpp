@@ -922,11 +922,11 @@ public:
 	HttpServer &owner;
 };
 
-void HttpServer::start(NetAddrList listenSockets, unsigned int threads, unsigned int dispatchers) {
+void HttpServer::start(NetAddrList listenSockets, unsigned int threads, AsyncProvider a) {
 	if (socketServer.has_value()) return;
 
 	socketServer.emplace(listenSockets);
-	AsyncProvider a = createAsyncProvider(dispatchers);
+
 	for (unsigned int i = 0; i < threads; i++) {
 		this->threads.emplace_back([a, this]() mutable {
 			setThreadAsyncProvider(a);
@@ -948,6 +948,14 @@ void HttpServer::start(NetAddrList listenSockets, unsigned int threads, unsigned
 	a.runAsync([=]{
 		listen();
 	});
+
+}
+
+
+void HttpServer::start(NetAddrList listenSockets, unsigned int threads, unsigned int dispatchers) {
+	if (socketServer.has_value()) return;
+
+	start(listenSockets, threads, createAsyncProvider(dispatchers));
 }
 
 void HttpServer::listen() {

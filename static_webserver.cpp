@@ -12,8 +12,7 @@ namespace userver {
 
 StaticWebserver::StaticWebserver(const Config &cfg):
 		cfg(cfg),
-		docRootNative(cfg.document_root.native()),
-		whole_ver(cfg.version_prefix+cfg.version_nr) {
+		docRootNative(cfg.document_root.native()) {
 
 }
 
@@ -22,28 +21,6 @@ bool StaticWebserver::operator ()(PHttpServerRequest &req, std::string_view vpat
 	if (vpath[0] != '/') return false;
 	vpath = vpath.substr(1);
 	std::string buff;
-	if (!whole_ver.empty()){
-		auto vs = vpath;
-		auto sl = vpath.find('/');
-		auto verstr = vpath.substr(0,sl);
-		vpath = vpath.substr(verstr.length());
-		QueryParser::urlDecode(verstr, buff);
-		if (buff != whole_ver) {
-			std::string uri ( req->getURI() );
-			uri.resize(uri.length()-vs.length());
-			uri.append(whole_ver);
-			uri.push_back('/');
-			if (buff.compare(0, cfg.version_prefix.length(),  cfg.version_prefix) == 0) {
-				uri.append(vpath);
-			} else {
-				uri.append(vs);
-			}
-			req->set("Location", uri);
-			req->setStatus(302);
-			req->send("");
-			return true;
-		}
-	}
 
 	auto qm = vpath.find('?');
 	if (qm != vpath.npos) vpath = vpath.substr(0,qm);

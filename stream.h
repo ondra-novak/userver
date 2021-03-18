@@ -28,6 +28,7 @@ public:
 	virtual void flush() = 0;
 	virtual void flushAsync(CallbackT<void(bool)> &&fn) = 0;
 	virtual bool timeouted() const = 0;
+	virtual void clearTimeout() = 0;
 	virtual ~AbstractStream() {};
 	virtual std::size_t getOutputBufferSize() const = 0;
 
@@ -253,6 +254,8 @@ public:
 	}
 	///Determines wether the read or write operation timeouted
 	bool timeouted() const {return ptr->timeouted();}
+
+	void clearTimeout() {ptr->clearTimeout();}
 	///retrieve a char from the stream (synchronously)
 	int getChar() {
 		auto c = read();
@@ -379,6 +382,7 @@ public:
 	virtual void flushAsync(CallbackT<void(bool)> &&fn) override;
 	virtual bool timeouted() const override;
 	virtual std::size_t getOutputBufferSize() const override;
+	virtual void clearTimeout() override;
 	ISocket &getSocket() const;
 
 	static std::size_t maxWrBufferSize;
@@ -416,6 +420,7 @@ public:
 	virtual void flush() override;
 	virtual void flushAsync(CallbackT<void(bool)> &&fn) override;
 	virtual bool timeouted() const override;
+	virtual void clearTimeout() override;
 	virtual std::size_t getOutputBufferSize() const override;
 protected:
 	SS source;
@@ -450,6 +455,8 @@ public:
 	virtual void flush() override;
 	virtual void flushAsync(CallbackT<void(bool)> &&fn) override;
 	virtual bool timeouted() const override;
+	virtual void clearTimeout()  override;
+
 	virtual std::size_t getOutputBufferSize() const override;
 protected:
 	SS source;
@@ -647,6 +654,11 @@ inline std::size_t ChunkedStream<SS>::getOutputBufferSize() const {
 }
 
 template<typename SS>
+inline void ChunkedStream<SS>::clearTimeout()  {
+	source.clearTimeout();
+}
+
+template<typename SS>
 inline bool ChunkedStream<SS>::flushNB() {
 	if (!curChunk.empty()) {
 		putHex(curChunk.length());
@@ -702,6 +714,11 @@ inline void ChunkedStream<SS>::putHex(std::size_t sz) {
 		char chars[] = "0123456789ABCDEF";
 		source.putCharNB(chars[sz & 0xF]);
 	}
+}
+
+template<typename SS>
+inline void LimitedStream<SS>::clearTimeout()  {
+	source.clearTimeout();
 }
 
 template<typename SS>

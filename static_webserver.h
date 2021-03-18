@@ -33,8 +33,6 @@ public:
 	struct Config {
 		std::filesystem::path document_root;
 		std::string indexFile;
-		std::string version_prefix;
-		std::string version_nr;
 		unsigned int cachePeriod = 0;
 	};
 
@@ -45,7 +43,6 @@ public:
 protected:
 	Config cfg;
 	std::string docRootNative;
-	std::string whole_ver;
 
 };
 

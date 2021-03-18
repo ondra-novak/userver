@@ -91,6 +91,8 @@ public:
 
 	///returns true, when any blocking or async operation timeouted
 	virtual bool timeouted() const = 0;
+
+	virtual void clearTimeout() = 0;
 };
 
 

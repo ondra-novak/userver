@@ -303,7 +303,9 @@ public:
 	 * @param dispatchers count of dispatchers, which monitors pending connections. Must be less or equal to threads
 	 */
 	void start(NetAddrList listenSockets, unsigned int threads, unsigned int dispatchers = 1);
-	///Stop the server
+
+	void start(NetAddrList listenSockets, unsigned int threads, AsyncProvider asyncProvider);
+///Stop the server
 	/**
 	 * Function joins all threads, will block until the operation completes
 	 * @note if there is work in thread, it will wait until work is finish. All pending asynchronous

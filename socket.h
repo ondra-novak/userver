@@ -55,6 +55,8 @@ public:
 
 	SocketHandle getHandle() const {return s;}
 
+	virtual void clearTimeout() override;
+
 protected:
 	SocketHandle s = -1;
 	int readtm=-1;

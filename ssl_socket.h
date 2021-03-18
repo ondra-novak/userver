@@ -51,6 +51,7 @@ public:
 	virtual int getWrTimeout() const  override;
 	virtual void setRdTimeout(int tm)  override;
 	virtual int getRdTimeout() const  override;
+	virtual void clearTimeout() override;
 
 protected:
 

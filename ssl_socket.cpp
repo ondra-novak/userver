@@ -368,4 +368,8 @@ void SSLSocket::setSSLContext(const PSSL_CTX &ctx) {
 	this->ctx = ctx;
 }
 
+void SSLSocket::clearTimeout() {
+	s.clearTimeout();
+}
+
 }

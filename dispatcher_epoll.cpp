@@ -15,6 +15,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <iostream>
 namespace userver {
 
 
@@ -146,16 +147,21 @@ Dispatcher_EPoll::Task Dispatcher_EPoll::getTask() {
 			if (fd != event_fd) {
 				RegList &regs = fd_map[fd];
 
-				Op op;
-				if (ev.events & EPOLLIN) {
-					op = Op::read;
-				} else if (ev.events & EPOLLOUT) {
-					op = Op::write;
+				auto iter = regs.begin();
+
+				if (ev.events & (EPOLLIN|EPOLLHUP)) {
+					iter = std::find_if(regs.begin(), regs.end(), [&](const Reg &rg){
+							return rg.op == Op::read;
+					});
+				} else if (ev.events & (EPOLLOUT|EPOLLERR)) {
+					iter = std::find_if(regs.begin(), regs.end(), [&](const Reg &rg){
+							return rg.op == Op::write;
+					});
+				}
+				if (iter == regs.end() && (ev.events & EPOLLERR)) {
+					iter = regs.end();
 				}
 
-				auto iter = std::find_if(regs.begin(), regs.end(), [&](const Reg &rg){
-						return rg.op == op;
-				});
 
 				if (iter != regs.end()) {
 					Task tsk(std::move(iter->cb), false);

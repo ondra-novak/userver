@@ -358,4 +358,9 @@ bool Socket::waitForWrite(int tm) const {
 #endif
 }
 
+void Socket::clearTimeout() {
+	tm = false;
+}
+
+
 }
