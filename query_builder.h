@@ -59,7 +59,7 @@ std::string buildQuery(const T &data) {
 }
 
 template<typename T>
-void BuildQueryItem<T>::build(std::ostream &out, const T &data) {
+inline void BuildQueryItem<T>::build(std::ostream &out, const T &data) {
 	auto iter = data.begin();
 	auto iend = data.end();
 	if (iter == iend) return;
@@ -70,7 +70,7 @@ void BuildQueryItem<T>::build(std::ostream &out, const T &data) {
 	BuildQueryItem<std::pair<std::string_view, std::string_view> >::send(out, *iter);
 }
 
-std::string buildQuery(const std::initializer_list<std::pair<std::string_view, std::string_view> > &data) {
+inline std::string buildQuery(const std::initializer_list<std::pair<std::string_view, std::string_view> > &data) {
 	auto iter = data.begin();
 	auto iend = data.end();
 	if (iter == iend) return std::string();

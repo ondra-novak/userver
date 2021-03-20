@@ -158,6 +158,9 @@ public:
 	///Returns host of current opened request
 	const std::string &getHost() const {return host;}
 
+	///Retrieves stream which carries whole response, which is released when stream is destroyed
+	static Stream getResponseBody(std::unique_ptr<HttpClientRequest> &&req);
+
 protected:
 
 	void addHeaderInternal(const std::string_view &key, const std::string_view &value);
@@ -189,9 +192,9 @@ struct HttpClientCfg {
 
 	std::string userAgent;
 	int connectTimeout = 30000;
-	CallbackT<PSocket(const NetAddr &, const std::string_view &host)> connect;
-	CallbackT<PSocket(const NetAddr &, const std::string_view &host)> sslConnect;
-	CallbackT<NetAddr(const std::string_view &)> resolve;
+	CallbackT<PSocket(const NetAddr &, const std::string_view &host)> connect = nullptr;
+	CallbackT<PSocket(const NetAddr &, const std::string_view &host)> sslConnect = nullptr;
+	CallbackT<NetAddr(const std::string_view &)> resolve = nullptr;
 };
 
 class HttpClient {

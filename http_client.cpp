@@ -429,4 +429,34 @@ HttpClient::HeaderList::HeaderList(const HeaderPair *lst, std::size_t count)
 HttpClient::HttpClient(HttpClientCfg &&cfg):cfg(std::move(cfg)) {
 }
 
+class StreamWrap: public AbstractStream {
+public:
+	StreamWrap(Stream &s, std::unique_ptr<HttpClientRequest> &&req):req(std::move(req)),s(s) {}
+
+	virtual std::string_view read() override {return s.read();}
+	virtual void readAsync(CallbackT<void(const std::string_view &data)> &&fn) override {return s.readAsync(std::move(fn));}
+	virtual void putBack(const std::string_view &pb) override {return s.putBack(pb);}
+	virtual void write(const std::string_view &) override {}
+	virtual bool writeNB(const std::string_view &) override {return false;}
+	virtual void closeOutput() override  {}
+	virtual void closeInput() override  {s.closeInput();}
+	virtual void flush() override  {}
+	virtual void flushAsync(CallbackT<void(bool)> &&fn) override  {fn(false);}
+	virtual bool timeouted() const override  {return s.timeouted();}
+	virtual void clearTimeout() override  {s.clearTimeout();}
+	virtual std::size_t getOutputBufferSize() const override  {return s.getOutputBufferSize();}
+
+
+protected:
+	std::unique_ptr<HttpClientRequest> req;
+	Stream &s;
+
+
+};
+
+Stream HttpClientRequest::getResponseBody(std::unique_ptr<HttpClientRequest> &&req) {
+	Stream &s = req->getResponse();
+	return Stream(new StreamWrap(s,std::move(req)));
+}
+
 }

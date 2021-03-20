@@ -517,7 +517,7 @@ Stream HttpServerRequest::send() {
 			if (!has_content_length) {
 				if (enableKeepAlive && httpver == "HTTP/1.1") {
 					set("Transfer-Encoding", "chunked");
-				} else if (has_connection) {
+				} else if (!has_connection) {
 					set("Connection","close");
 				}
 			}
