@@ -1181,7 +1181,7 @@ bool HttpServerRequest::isHEAD() const {
 }
 
 bool HttpServerRequest::allowMethods(std::initializer_list<std::string_view> methods) {
-	std::size_t cnt;
+	std::size_t cnt = 0;
 	for (const auto &x: methods) {
 		if (HeaderValue::iequal(method,x)) return true;
 		cnt += x.length()+2;

@@ -111,6 +111,10 @@ public:
 	* called on different provider, it replaces current registration
 	*/
 	void stopOnSignal();
+
+	void stop() {
+		return get()->stop();
+	}
 };
 
 enum class AsyncProviderType {
