@@ -179,12 +179,12 @@ Dispatcher::Task Dispatcher::getTask() {
 						new_regs.pop_back();
 					}
 				} else {
-					Task ret (std::move(regs[idx].cb), false);
+					Task ret (std::move(regs[idx].cb), true);
 					removeItem(idx);
 					return ret;
 				}
 			} else if (regs[idx].timeout < now || waiting[idx].events == 0) {
-				Task ret (std::move(regs[idx].cb), true);
+				Task ret (std::move(regs[idx].cb), false);
 				removeItem(idx);
 				return ret;
 			} else {

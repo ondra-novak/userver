@@ -177,8 +177,8 @@ void Socket::read(void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
 		int err = errno;
 		if (err == EWOULDBLOCK) {
 #endif
-			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::read, s), [this, buffer, size, fn = std::move(fn)](bool b){
-				if (b) {
+			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::read, s), [this, buffer, size, fn = std::move(fn)](bool succ){
+				if (!succ) {
 					this->tm = true;
 					fn(0);
 				} else {
@@ -208,8 +208,8 @@ void Socket::write(const void *buffer, std::size_t size, CallbackT<void(int)> &&
 		int err = errno;
 		if (err == EWOULDBLOCK) {
 #endif
-			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::write, s), [this, buffer, size, fn = std::move(fn)](bool b){
-				if (b) {
+			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::write, s), [this, buffer, size, fn = std::move(fn)](bool succ){
+				if (!succ) {
 					this->tm = true;
 					fn(0);
 				} else {
@@ -293,9 +293,9 @@ void Socket::waitConnect(int tm, CallbackT<void(bool)> &&cb)  {
 	auto now = std::chrono::system_clock::now();
 	auto checkTime = tm < 0 || tm > 1000 ? now + std::chrono::seconds(1) : now + std::chrono::milliseconds(tm);
 	getCurrentAsyncProvider()->runAsync(AsyncResource(AsyncResource::write, s),
-		[this, cb = std::move(cb), tm](bool timeouted) mutable {
+		[this, cb = std::move(cb), tm](bool success) mutable {
 
-		if (!timeouted) {
+		if (!success) {
 			cb(checkSocketState());
 		}
 		else {
@@ -318,8 +318,8 @@ void Socket::waitConnect(int tm, CallbackT<void(bool)> &&cb)  {
 
 #else
 	getCurrentAsyncProvider()->runAsync(AsyncResource(AsyncResource::write, s),
-			[this, cb = std::move(cb)](bool timeouted) {
-				cb(!timeouted && checkSocketState());
+			[this, cb = std::move(cb)](bool success) {
+				cb(success && checkSocketState());
 			}, tm<0?std::chrono::system_clock::time_point::max()
 					:std::chrono::system_clock::now()+std::chrono::milliseconds(tm));
 #endif

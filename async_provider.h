@@ -21,13 +21,20 @@ class AsyncResource;
 class IAsyncProvider {
 public:
 
+	///Specify callback form
+	/**
+	 * The function sets argument to true, if the asynchronous operation completed successfuly, or false, if the operation failed. You
+	 * can use std::current_exception to capture the error. If there is no exception, it failed because timeout.
+	 *
+	 *
+	 */
 	using Callback = CallbackT<void(bool)>;
 
 	///run asynchronously
 	/**
 	 * @param res asynchronous resource
 	 * @param cb callback
-	 * @param timeout timeout
+	 * @param timeout timeout as absolute point in time. To set "no timeout", use system_clock::time_point::max
 	 */
 	virtual void runAsync(const AsyncResource &res, Callback &&cb,const std::chrono::system_clock::time_point &timeout) = 0;
 	///Run asynchronously

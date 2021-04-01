@@ -105,8 +105,8 @@ protected:
 };
 template<typename Fn, typename>
 void DGramSocket::readAsync(AsyncProvider aprovider, Fn &&cb, int timeout) {
-	aprovider.runAsync(getReadAsync(), [this,aprovider,timeout,fn = std::move(cb)](bool tm){
-		if (tm) fn(std::string_view());
+	aprovider.runAsync(getReadAsync(), [this,aprovider,timeout,fn = std::move(cb)](bool succ){
+		if (!succ) fn(std::string_view());
 		else {
 			recv(0);
 			std::string_view data = getData();

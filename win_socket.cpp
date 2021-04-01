@@ -131,8 +131,8 @@ namespace userver {
 		if (r < 0) {
 			int err = WSAGetLastError();
 			if (err == WSAEWOULDBLOCK) {
-				getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::read, s), [this, buffer, size, fn = std::move(fn)](bool b) mutable {
-					if (b) {
+				getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::read, s), [this, buffer, size, fn = std::move(fn)](bool succ) mutable {
+					if (!succ) {
 						this->tm = true;							
 						fn(0);
 					}
@@ -158,8 +158,8 @@ namespace userver {
 		if (r < 0) {
 			int err = WSAGetLastError();
 			if (err == WSAEWOULDBLOCK) {
-				getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::write, s), [this, buffer, size, fn = std::move(fn)](bool b){
-					if (b) {
+				getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::write, s), [this, buffer, size, fn = std::move(fn)](bool succ){
+					if (!succ) {
 						this->tm = true;
 						fn(0);
 					}
@@ -230,10 +230,10 @@ namespace userver {
 		auto now = std::chrono::system_clock::now();
 		auto checkTime = tm < 0 || tm > 1000 ? now + std::chrono::seconds(1) : now + std::chrono::milliseconds(tm);
 		getCurrentAsyncProvider()->runAsync(AsyncResource(AsyncResource::write, s),
-			[this, cb = std::move(cb), tm](bool timeouted) mutable {
+			[this, cb = std::move(cb), tm](bool succ) mutable {
 
 
-			if (!timeouted) {
+			if (succ) {
 				cb(checkSocketState());
 			}
 			else {
