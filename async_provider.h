@@ -84,7 +84,7 @@ public:
 	 * @retval false asynchronous provider has been stopped (probably is being destroyed)
 	 */
 	template<typename Pred>
-	auto yield_until(Pred &&pred) -> typename std::is_invocable_r<bool, Pred, bool()>::value {
+	auto yield_until(Pred &&pred) -> decltype(!pred()) {
 		while (!pred()) {
 			if (!yield()) return false;
 		}
