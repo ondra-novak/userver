@@ -64,6 +64,14 @@ void Dispatcher_EPoll::stop() {
 	if (stopped.compare_exchange_strong(need, true)) {
 		notify();
 	}
+	std::lock_guard _(lock);
+	for (auto &c:fd_map) {
+		for (auto &x:c.second) {
+			x.cb.reset();
+		}
+	}
+
+
 }
 
 void Dispatcher_EPoll::regImmCall(Callback &&cb) {

@@ -102,6 +102,13 @@ void Dispatcher::stop() {
 	std::unique_lock _(lk);
 	stopped = true;
 	notify();
+	for (auto &c: regs) {
+		c.cb.reset();
+	}
+	for (auto &c: new_regs) {
+		c.cb.reset();
+	}
+
 }
 
 void Dispatcher::removeItem(std::size_t idx) {
