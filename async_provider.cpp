@@ -110,7 +110,7 @@ inline bool AsyncProviderImpl::yield() {
 		wt.notify_one();
 		_.unlock();
 		if (task.valid()) {
-			task.cb(task.timeouted);
+			task.cb(task.success);
 			rethrowStoredException();
 			return true;
 		} else {

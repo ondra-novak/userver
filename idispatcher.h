@@ -25,10 +25,10 @@ public:
 
 	struct Task {
 		Callback cb;
-		bool timeouted;
+		bool success;
 
-		Task(Callback &&cb, bool timeouted):cb(std::move(cb)), timeouted(timeouted) {}
-		Task():cb(nullptr),timeouted(false) {}
+		Task(Callback &&cb, bool success):cb(std::move(cb)), success(success) {}
+		Task():cb(nullptr),success(false) {}
 
 		bool valid() const {return cb != nullptr;}
 	};
