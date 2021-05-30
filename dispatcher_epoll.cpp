@@ -64,6 +64,14 @@ void Dispatcher_EPoll::stop() {
 	if (stopped.compare_exchange_strong(need, true)) {
 		notify();
 	}
+	std::lock_guard _(lock);
+	for (auto &c:fd_map) {
+		for (auto &x:c.second) {
+			x.cb.reset();
+		}
+	}
+
+
 }
 
 void Dispatcher_EPoll::regImmCall(Callback &&cb) {
@@ -111,7 +119,7 @@ Dispatcher_EPoll::Task Dispatcher_EPoll::getTask() {
 		do {
 			mx.lock();
 			if (!imm_calls.empty()) {
-				Task t(std::move(imm_calls.front()), true);
+				Task t(std::move(imm_calls.front()), false);
 				imm_calls.pop();
 				return t;
 			}
@@ -137,7 +145,7 @@ Dispatcher_EPoll::Task Dispatcher_EPoll::getTask() {
 				return rg.timeout <= now;
 			});
 			if (itr != regs.end()) {
-				Task tsk(std::move(itr->cb), true);
+				Task tsk(std::move(itr->cb), false);
 				regs.erase(itr);
 				rearm_fd(false, tmfd, regs);
 				return tsk;
@@ -164,7 +172,7 @@ Dispatcher_EPoll::Task Dispatcher_EPoll::getTask() {
 
 
 				if (iter != regs.end()) {
-					Task tsk(std::move(iter->cb), false);
+					Task tsk(std::move(iter->cb), true);
 					regs.erase(iter);
 					rearm_fd(false, fd, regs);
 					return tsk;

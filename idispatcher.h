@@ -17,6 +17,7 @@ namespace userver {
 class IDispatcher {
 public:
 
+	//NOTE! the argument is now success, not timeout
 	using Callback = CallbackT<void(bool)>;
 	virtual void waitRead(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) = 0;
 	virtual void waitWrite(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) = 0;
@@ -26,7 +27,7 @@ public:
 		Callback cb;
 		bool success;
 
-		Task(Callback &&cb, bool timeouted):cb(std::move(cb)), success(timeouted) {}
+		Task(Callback &&cb, bool success):cb(std::move(cb)), success(success) {}
 		Task():cb(nullptr),success(false) {}
 
 		bool valid() const {return cb != nullptr;}

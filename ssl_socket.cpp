@@ -171,15 +171,15 @@ void SSLSocket::handleStateAsync(int r, int tm, Fn &&fn) {
 			break;
 		case SSL_ERROR_WANT_WRITE:
 			getCurrentAsyncProvider().runAsync(
-					AsyncResource(AsyncResource::write, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool x) mutable {
-							fn(x?State::timeout:State::retry);
+					AsyncResource(AsyncResource::write, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool succ) mutable {
+							fn(succ?State::retry:State::timeout);
 					},
 					std::chrono::system_clock::now() + std::chrono::milliseconds(tm)
 			);break;
 		case SSL_ERROR_WANT_READ:
 			getCurrentAsyncProvider().runAsync(
-					AsyncResource(AsyncResource::read, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool x) mutable {
-						fn(x?State::timeout:State::retry);},
+					AsyncResource(AsyncResource::read, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool succ) mutable {
+						fn(succ?State::retry:State::timeout);},
 					std::chrono::system_clock::now() + std::chrono::milliseconds(tm)
 			);break;
 		case SSL_ERROR_SYSCALL: {
@@ -355,8 +355,8 @@ void SSLSocket::shutdownAsync() {
 			case SSL_ERROR_WANT_READ: op = AsyncResource::read;break;
 			default: return;
 		}
-		getCurrentAsyncProvider().runAsync(AsyncResource(op, h),[sock = SSLSocket(std::move(*this))](bool tm) mutable {
-			if (!tm) sock.shutdownAsync();
+		getCurrentAsyncProvider().runAsync(AsyncResource(op, h),[sock = SSLSocket(std::move(*this))](bool succ) mutable {
+			if (succ) sock.shutdownAsync();
 		}, std::chrono::system_clock::now()+std::chrono::seconds(30));
 	}
 }

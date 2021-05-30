@@ -11,6 +11,7 @@ set(userver_sources 	netaddr.cpp
 	async_provider.cpp
 	query_parser.cpp
 	dgramsocket.cpp
+	filedesc.cpp
 	init.cpp
 	static_webserver.cpp
 )

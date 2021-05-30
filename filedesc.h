@@ -1,34 +1,30 @@
 /*
- * socket.h
+ * filedesc.h
  *
- *  Created on: 9. 1. 2021
+ *  Created on: 20. 4. 2021
  *      Author: ondra
  */
 
-#ifndef SRC_MAIN_SOCKET_H_
-#define SRC_MAIN_SOCKET_H_
+#ifndef SRC_USERVER_FILEDESC_H_
+#define SRC_USERVER_FILEDESC_H_
 #include "isocket.h"
-#include "platform_def.h"
+
 
 namespace userver {
 
-class NetAddr;
-
-class Socket: public ISocket {
+class FileDesc: public ISocket {
 public:
-	Socket();
-	explicit Socket(SocketHandle s);
-	virtual ~Socket();
-	Socket(Socket &&other);
-	Socket &operator=(Socket &&other);
+	FileDesc();
+	FileDesc(int fd);
+	virtual ~FileDesc() override;
+
+	FileDesc(FileDesc &&other);
+	FileDesc &operator=(FileDesc &&other);
 
 	int read(void *buffer, std::size_t size) override;
 	int write(const void *buffer, std::size_t size) override;
 	void read(void *buffer, std::size_t size, CallbackT<void(int)> &&fn) override;
-	void read2(void *buffer, std::size_t size, CallbackT<void(int)> &&fn, bool async);
 	void write(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn) override;
-	void write2(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn, bool async) ;
-
 
 	void closeOutput() override;
 	void closeInput() override;
@@ -48,27 +44,21 @@ public:
 	bool waitForRead(int tm) const;
 	bool waitForWrite(int tm) const;
 
-	///Connect the socket
-	/**
-	 * @param addr address to connect
-	 * @return socket in connection state. You need to call waitConnect()
-	 */
-	static Socket connect(const NetAddr &addr);
-
-	SocketHandle getHandle() const {return s;}
+	int getHandle() const {return fd;}
 
 	virtual void clearTimeout() override;
 
+
+	void close();
 protected:
-	SocketHandle s = -1;
+	int fd=-1;
 	int readtm=-1;
 	int writetm=-1;
 	bool tm = false;
-
-	bool checkSocketState() const;
 };
+
 
 }
 
 
-#endif /* SRC_MAIN_SOCKET_H_ */
+#endif /* SRC_USERVER_FILEDESC_H_ */

@@ -293,6 +293,7 @@ SocketHandle NetAddrIPv6::listen() const {
 	SocketHandle sock = newSocket(this, AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 	try {
 		int flag = 1;
+		if (::setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<char *>(&flag), sizeof(int))) error(this, lastError(), "setsockopt(IPV6_V6ONLY)");
 #ifndef _WIN32
 		if (::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<char *>(&flag), sizeof(int))) error(this, lastError(), "setsockopt(SO_REUSEADDR)");
 #endif

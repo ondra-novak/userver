@@ -164,8 +164,12 @@ bool Socket::timeouted() const {
 
 Socket::Socket(SocketHandle s):s(s) {
 }
-
 void Socket::read(void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
+	read2(buffer, size, std::move(fn), false);
+}
+
+
+void Socket::read2(void *buffer, std::size_t size, CallbackT<void(int)> &&fn, bool async) {
 #ifdef _WIN32
 	int r = recv(s, reinterpret_cast<char*>(buffer), static_cast<unsigned int>(size), 0);
 	if (r < 0) {
@@ -177,26 +181,32 @@ void Socket::read(void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
 		int err = errno;
 		if (err == EWOULDBLOCK) {
 #endif
-			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::read, s), [this, buffer, size, fn = std::move(fn)](bool b){
-				if (b) {
+			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::read, s), [this, buffer, size, fn = std::move(fn)](bool succ) mutable {
+				if (!succ) {
 					this->tm = true;
 					fn(0);
 				} else {
-					fn(read(buffer, size));
+					read2(buffer, size,  std::move(fn), true);
 				}
 			}, readtm<0?std::chrono::system_clock::time_point::max()
 					 :std::chrono::system_clock::now()+std::chrono::milliseconds(readtm));
 		} else {
 			error(err,"socket read()");
 		}
+	} else if (async) {
+		fn(r);
 	} else {
 		getCurrentAsyncProvider().runAsync([fn = std::move(fn),r]{
 			fn(r);
 		});
 	}
 }
-
 void Socket::write(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
+	write2(buffer, size, std::move(fn), false);
+}
+
+
+void Socket::write2(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn, bool async) {
 #ifdef _WIN32
 	int r = send(s, reinterpret_cast<const char*>(buffer), static_cast<unsigned int>(size), 0);
 	if (r < 0) {
@@ -208,21 +218,24 @@ void Socket::write(const void *buffer, std::size_t size, CallbackT<void(int)> &&
 		int err = errno;
 		if (err == EWOULDBLOCK) {
 #endif
-			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::write, s), [this, buffer, size, fn = std::move(fn)](bool b){
-				if (b) {
+			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::write, s), [this, buffer, size, fn = std::move(fn)](bool succ) mutable {
+				if (!succ) {
 					this->tm = true;
 					fn(0);
 				} else {
-					fn(write(buffer, size));
+					write2(buffer, size, std::move(fn), true);
 				}
-			}, std::chrono::system_clock::now()+std::chrono::milliseconds(writetm));
+			}, writetm<0?std::chrono::system_clock::time_point::max()
+					:std::chrono::system_clock::now()+std::chrono::milliseconds(writetm));
 		} else {
 			try {
 				error(err,"socket write()");
 			} catch (...) {
-				fn(0);
+				fn(-1);
 			}
 		}
+	} else if (async) {
+		fn(r);
 	} else {
 		getCurrentAsyncProvider().runAsync([fn = std::move(fn),r]{
 			fn(r);
@@ -293,9 +306,9 @@ void Socket::waitConnect(int tm, CallbackT<void(bool)> &&cb)  {
 	auto now = std::chrono::system_clock::now();
 	auto checkTime = tm < 0 || tm > 1000 ? now + std::chrono::seconds(1) : now + std::chrono::milliseconds(tm);
 	getCurrentAsyncProvider()->runAsync(AsyncResource(AsyncResource::write, s),
-		[this, cb = std::move(cb), tm](bool timeouted) mutable {
+		[this, cb = std::move(cb), tm](bool success) mutable {
 
-		if (!timeouted) {
+		if (!success) {
 			cb(checkSocketState());
 		}
 		else {
@@ -318,8 +331,8 @@ void Socket::waitConnect(int tm, CallbackT<void(bool)> &&cb)  {
 
 #else
 	getCurrentAsyncProvider()->runAsync(AsyncResource(AsyncResource::write, s),
-			[this, cb = std::move(cb)](bool timeouted) {
-				cb(!timeouted && checkSocketState());
+			[this, cb = std::move(cb)](bool success) {
+				cb(success && checkSocketState());
 			}, tm<0?std::chrono::system_clock::time_point::max()
 					:std::chrono::system_clock::now()+std::chrono::milliseconds(tm));
 #endif

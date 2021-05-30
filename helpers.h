@@ -79,6 +79,41 @@ public:
 		};
 		ptr = std::make_unique<Impl>(std::forward<Fn>(fn));
 	}
+
+	///Creates callback function which allows to defined reaction for situation when  callback is not called
+	/**
+	 * @param fn function to call
+	 * @param cfn function called when callback is destroyed without calling
+	 */
+	template<typename Fn, typename CancelCallback,
+				typename = decltype(std::declval<Fn>()(std::declval<Args>()...)),
+				typename = decltype(std::declval<CancelCallback>()())>
+	CallbackT(Fn &&fn, CancelCallback &&cfn) {
+		class Impl: public CBIfc {
+		public:
+			Impl(Fn &&fn, CancelCallback &&cfn):fn(std::forward<Fn>(fn)),cfn(std::forward<CancelCallback>(cfn)) {}
+			virtual Ret invoke(Args ... args) const override {
+				called = true;
+				return fn(std::forward<Args>(args)...);
+			}
+			~Impl() {
+				if (!called) {
+					try {
+						cfn();
+					} catch (...) {
+
+					}
+				}
+
+			}
+		protected:
+			mutable std::remove_reference_t<Fn> fn;
+			mutable std::remove_reference_t<CancelCallback> cfn;
+			mutable bool called = false;
+		};
+		ptr = std::make_unique<Impl>(std::forward<Fn>(fn), std::forward<CancelCallback>(cfn));
+	}
+
 	CallbackT():ptr(nullptr) {}
 	CallbackT(std::nullptr_t):ptr(nullptr) {}
 	bool operator==(std::nullptr_t) const {return ptr == nullptr;}
@@ -89,6 +124,9 @@ public:
 	}
 	Ret operator()(Args ... args) const  {
 		return ptr->invoke(std::forward<Args>(args)...);
+	}
+	void reset() {
+		ptr = nullptr;
 	}
 
 protected:

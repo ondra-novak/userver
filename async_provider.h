@@ -21,13 +21,20 @@ class AsyncResource;
 class IAsyncProvider {
 public:
 
+	///Specify callback form
+	/**
+	 * The function sets argument to true, if the asynchronous operation completed successfuly, or false, if the operation failed. You
+	 * can use std::current_exception to capture the error. If there is no exception, it failed because timeout.
+	 *
+	 *
+	 */
 	using Callback = CallbackT<void(bool)>;
 
 	///run asynchronously
 	/**
 	 * @param res asynchronous resource
 	 * @param cb callback
-	 * @param timeout timeout
+	 * @param timeout timeout as absolute point in time. To set "no timeout", use system_clock::time_point::max
 	 */
 	virtual void runAsync(const AsyncResource &res, Callback &&cb,const std::chrono::system_clock::time_point &timeout) = 0;
 	///Run asynchronously
@@ -77,7 +84,7 @@ public:
 	 * @retval false asynchronous provider has been stopped (probably is being destroyed)
 	 */
 	template<typename Pred>
-	auto yield_until(Pred &&pred) -> typename std::is_invocable_r<bool, Pred, bool()>::value {
+	auto yield_until(Pred &&pred) -> decltype(!pred()) {
 		while (!pred()) {
 			if (!yield()) return false;
 		}
@@ -111,6 +118,10 @@ public:
 	* called on different provider, it replaces current registration
 	*/
 	void stopOnSignal();
+
+	void stop() {
+		return get()->stop();
+	}
 };
 
 enum class AsyncProviderType {
