@@ -194,7 +194,7 @@ struct HttpClientCfg {
 	int connectTimeout = 30000;
 	CallbackT<PSocket(const NetAddr &, const std::string_view &host)> connect = nullptr;
 	CallbackT<PSocket(const NetAddr &, const std::string_view &host)> sslConnect = nullptr;
-	CallbackT<NetAddr(const std::string_view &)> resolve = nullptr;
+	CallbackT<NetAddrList(const std::string_view &)> resolve = nullptr;
 };
 
 class HttpClient {
@@ -267,8 +267,11 @@ protected:
 	};
 
 	CrackedURL crackUrl(const std::string_view &url);
-	NetAddr resolve(const CrackedURL &cu);
+	NetAddrList resolve(const CrackedURL &cu);
 	std::unique_ptr<ISocket> connect(const NetAddr &addr, const CrackedURL &cu);
+
+	template<typename Fn>
+	void connectAsync(NetAddrList &&list, CrackedURL &&cu, Fn &&fn, unsigned int index);
 
 	std::unique_ptr<HttpClientRequest> sendRequest(const Method &method, const URL &url, HeaderList headers);
 	std::unique_ptr<HttpClientRequest> sendRequest(const Method &method, const URL &url, HeaderList headers, const Data &data);

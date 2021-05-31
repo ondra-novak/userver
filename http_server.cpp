@@ -758,7 +758,7 @@ bool HttpServerRequest::sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, co
 	}
 	return true;
 	} catch (std::exception &e) {
-		reqptr->log(e.what());
+		reqptr->log(LogLevel::error, e.what());
 		return false;
 	}
 }
@@ -820,7 +820,7 @@ bool HttpServerMapper::execHandler(PHttpServerRequest &req, const std::string_vi
 		return false;
 	} catch (std::exception &e) {
 		if (req != nullptr) {
-			req->log("Exception:", e.what());
+			req->log(LogLevel::error,"Exception:", e.what());
 			req->sendErrorPage(500);
 		}
 		return true;
@@ -917,7 +917,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 class Logger: public HttpServerRequest::ILogger {
 public:
 	Logger(HttpServer &owner):owner(owner) {}
-	virtual void handler_log(const HttpServerRequest &req, const std::string_view &msg) noexcept;
+	virtual void handler_log(const HttpServerRequest &req, LogLevel level, const std::string_view &msg) noexcept;
 	virtual void log(ReqEvent event, const HttpServerRequest &req) noexcept;
 	HttpServer &owner;
 };
@@ -1016,6 +1016,11 @@ void HttpServer::log(const HttpServerRequest &, const std::string_view &msg) {
 	buildLogMsg(std::cout, msg);
 }
 
+void HttpServer::log(const HttpServerRequest &r, LogLevel lev, const std::string_view &msg) {
+	std::lock_guard _(lock);
+	log(r,msg);
+}
+
 void HttpServer::unhandled() {
 	try {
 		throw;
@@ -1052,8 +1057,8 @@ void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
 	});
 }
 
-void HttpServerRequest::log2() {
-	logger->handler_log(*this, std::string_view(logBuffer.data(), logBuffer.size()));
+void HttpServerRequest::log2(LogLevel lev) {
+	logger->handler_log( *this, lev, std::string_view(logBuffer.data(), logBuffer.size()));
 	logBuffer.clear();
 }
 
@@ -1115,8 +1120,8 @@ void formatToLog(std::vector<char> &log, const double &v) {
 	formatToLog(log, std::to_string(v));
 }
 
-void Logger::handler_log(const HttpServerRequest &req, const std::string_view &msg) noexcept {
-	owner.log(req, msg);
+void Logger::handler_log(const HttpServerRequest &req, LogLevel level, const std::string_view &msg) noexcept {
+	owner.log(req, level, msg);
 }
 
 void Logger::log(ReqEvent event, const HttpServerRequest &req) noexcept {

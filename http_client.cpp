@@ -244,14 +244,13 @@ bool HttpClientRequest::parseResponse() {
 	}
 }
 
-NetAddr HttpClient::resolve(const CrackedURL &cu) {
+NetAddrList HttpClient::resolve(const CrackedURL &cu) {
 	NetAddr addr(NetAddr::PNetAddr(nullptr));
 	if (cfg.resolve != nullptr)  {
 		return cfg.resolve(cu.domain);
 	} else {
 		auto lst = NetAddr::fromString(cu.host, std::to_string(cu.port));
-		if (lst.empty()) throw std::runtime_error("HttpClient::open - can't resolve domain");
-		return std::move(lst[0]);
+		return lst;
 	}
 }
 
@@ -298,10 +297,17 @@ std::unique_ptr<HttpClientRequest> HttpClient::open(const Method &method, const 
 
 	auto cu = crackUrl(url);
 	if (!cu.valid) return nullptr;
-	NetAddr addr = resolve(cu);
-	auto socket = connect(addr,cu);
-	bool resp = socket->waitConnect(cfg.connectTimeout);
-	if (resp == false) return nullptr;
+
+	NetAddrList addr = resolve(cu);
+	std::unique_ptr<ISocket> socket;
+	unsigned int idx = 0;
+	while (idx < addr.size() && socket == nullptr) {
+		socket = connect(addr[idx],cu);
+		bool resp = socket->waitConnect(cfg.connectTimeout);
+		if (!resp) socket = nullptr;
+		idx++;
+	}
+	if (socket == nullptr) return nullptr;
 
 	Stream stream(new SocketStream(std::move(socket)));
 	auto req = std::make_unique<HttpClientRequest>(std::move(stream));
@@ -317,6 +323,20 @@ struct Clousure {
 };
 
 
+template<typename Fn>
+void HttpClient::connectAsync(NetAddrList &&list, CrackedURL &&cu, Fn &&fn, unsigned int idx) {
+	if (idx >= list.size()) fn(nullptr);
+	auto sock = connect(list[idx],cu);
+	ISocket *s = sock.get();
+	s->waitConnect(cfg.connectTimeout, [this, sock = std::move(sock), list = std::move(list), cu = std::move(cu), fn = std::forward<Fn>(fn), idx](bool ok) mutable  {
+		if (ok) {
+			fn(std::move(sock));
+		} else {
+			connectAsync(std::move(list), std::move(cu), std::forward<Fn>(fn), idx+1);
+		}
+	});
+}
+
 void HttpClient::open(const Method &method, const URL &url,Callback  &&callback) {
 
 
@@ -329,11 +349,8 @@ void HttpClient::open(const Method &method, const URL &url,Callback  &&callback)
 
 		auto cu = crackUrl(clousure->url);
 		if (!cu.valid) clousure->cb(nullptr);
-		NetAddr addr = resolve(cu);
-		auto socket = connect(addr,cu);
-		auto s = socket.get();
-		s->waitConnect(cfg.connectTimeout,[this, cu,socket = std::move(socket), clousure=std::move(clousure)](bool ok)mutable{
-			if (!ok) {
+		connectAsync(resolve(cu),std::move(cu), [this, cu, clousure = std::move(clousure)](std::unique_ptr<ISocket> &&socket){
+			if (socket!=nullptr) {
 				clousure->cb(nullptr);
 			} else {
 				Stream stream(new SocketStream(std::move(socket)));
@@ -342,7 +359,7 @@ void HttpClient::open(const Method &method, const URL &url,Callback  &&callback)
 				req->addHeader("UserAgent", cfg.userAgent);
 				clousure->cb(std::move(req));
 			}
-		});
+		},0);
 	});
 
 }
