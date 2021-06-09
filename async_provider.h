@@ -144,6 +144,8 @@ void setThreadAsyncProvider(AsyncProvider aprovider);
 
 AsyncProvider getCurrentAsyncProvider();
 
+std::optional<AsyncProvider> getCurrentAsyncProvider_NoException();
+
 ///Store current exception - can be rethrow later
 /** useful to store exceptions caught in destructor */
 void storeException();

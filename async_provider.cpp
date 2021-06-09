@@ -153,13 +153,20 @@ void setThreadAsyncProvider(AsyncProvider aprovider) {
 	curThreadAsyncProvider = aprovider;
 }
 
-AsyncProvider getCurrentAsyncProvider() {
+std::optional<AsyncProvider> getCurrentAsyncProvider_NoException() {
 	if (curThreadAsyncProvider == nullptr) {
 		std::lock_guard _(asyncLock);
 		curThreadAsyncProvider = curAsyncProvider;
 	}
-	if (curThreadAsyncProvider == nullptr) throw std::runtime_error("No asynchronous provider is active");
-	return curThreadAsyncProvider;
+	if (curThreadAsyncProvider == nullptr) return std::optional<AsyncProvider>();
+	else return curThreadAsyncProvider;
+}
+
+AsyncProvider getCurrentAsyncProvider() {
+
+	auto x = getCurrentAsyncProvider_NoException();
+	if (!x.has_value()) throw std::runtime_error("No asynchronous provider is active");
+	return *x;
 }
 
 static AsyncProvider stopOnSignalAsyncProvider;
