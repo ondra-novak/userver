@@ -961,7 +961,7 @@ void HttpServer::start(NetAddrList listenSockets, unsigned int threads, unsigned
 void HttpServer::listen() {
 	socketServer->waitAcceptAsync([&](std::optional<SocketServer::AcceptInfo> &acpt) {
 		if (acpt.has_value()) {
-			acpt->sock.setIOTimeout(5000);
+			acpt->sock.setIOTimeout(iotimeout);
 			Stream s(std::make_unique<SocketStream>(std::make_unique<Socket>(std::move(acpt->sock))));
 			if (!onConnect(s)) {
 				PHttpServerRequest req = std::make_unique<HttpServerRequest>();

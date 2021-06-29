@@ -421,12 +421,15 @@ public:
 	 */
 	virtual void reuse_buffers(HttpServerRequest &old_req, HttpServerRequest &new_req);
 
+	void setIOTimeout(unsigned int tm) {iotimeout = tm;}
+
 protected:
 	std::vector<std::thread> threads;
 	AsyncProvider asyncProvider;
 	std::optional<SocketServer> socketServer;
 	std::unique_ptr<HttpServerRequest::ILogger> logger;
 	std::mutex lock;
+	unsigned int iotimeout = 5000;
 
 	void listen();
 	void beginRequest(Stream &&s, PHttpServerRequest &&req);
