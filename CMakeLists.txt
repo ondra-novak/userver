@@ -14,6 +14,7 @@ set(userver_sources 	netaddr.cpp
 	filedesc.cpp
 	init.cpp
 	static_webserver.cpp
+	openapi.cpp
 )
 
 if(NOT DEFINED USERVER_NO_SSL)

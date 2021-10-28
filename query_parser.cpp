@@ -5,20 +5,21 @@
 
 namespace userver {
 
+RequestParams::RequestParams() {}
 
 QueryParser::QueryParser(std::string_view vpath) {
 	parse(vpath, false);
 }
 
-QueryParser::ParamMap::const_iterator QueryParser::begin() const {
+RequestParams::ParamMap::const_iterator RequestParams::begin() const {
 	return pmap.begin();
 }
 
-QueryParser::ParamMap::const_iterator QueryParser::end() const {
+RequestParams::ParamMap::const_iterator RequestParams::end() const {
 	return pmap.end();
 }
 
-HeaderValue QueryParser::operator [](std::string_view key) const {
+HeaderValue RequestParams::operator [](std::string_view key) const {
 	Item srch;
 	srch.first = key;
 	auto itr = std::lower_bound(pmap.begin(), pmap.end(), srch, &orderItems);
@@ -163,15 +164,15 @@ void QueryParser::parse(std::string_view vpath, bool postBody) {
 	std::swap(this->data, data);
 }
 
-std::string_view QueryParser::getPath() const {
+std::string_view RequestParams::getPath() const {
 	return path;
 }
 
-bool QueryParser::orderItems(const Item& a, const Item& b) {
+bool RequestParams::orderItems(const Item& a, const Item& b) {
 	return a.first < b.first;
 }
 
-void QueryParser::urlDecode(const std::string_view &src, std::string &out) {
+void RequestParams::urlDecode(const std::string_view &src, std::string &out) {
 	int state = 0;
 	int numb = 0;
 	for (char c: src) {
@@ -188,6 +189,70 @@ void QueryParser::urlDecode(const std::string_view &src, std::string &out) {
 				state = 0;
 		}
 	}
+}
+
+bool PathAndQueryParser::parsePath(const std::string_view &pattern) {
+	std::vector<std::pair<std::pair<std::size_t, std::size_t>, std::pair<std::size_t,std::size_t> > > newpmap;
+	std::size_t src=0;
+	std::size_t src_end = path.length();
+	std::size_t prn=0;
+	std::size_t prn_end = pattern.length();
+	std::string fldname;
+	std::string value;
+	while (src<src_end && prn<prn_end) {
+		char c= pattern[prn];
+		if (c == '{') {
+			fldname.clear();
+			fldname.push_back('~');
+			prn++;
+			while (prn < prn_end && pattern[prn] != '}') {
+				fldname.push_back(pattern[prn]);
+				++prn;
+			}
+			++prn;
+			value.clear();
+			std::string_view v;
+			if (prn <prn_end) {
+				std::size_t end = path.find(pattern[prn], src);
+				v = std::string_view(path.data()+src, end-src);
+			} else {
+				v = std::string_view(path.data()+src, src_end - src);
+			}
+			urlDecode(v, value);
+			auto l1 = pathdata.size();
+			std::copy(fldname.begin(), fldname.end(), std::back_inserter(pathdata));
+			auto l2 = pathdata.size();
+			pathdata.push_back('\0');
+			auto l3 = pathdata.size();
+			std::copy(value.begin(), value.end(), std::back_inserter(pathdata));
+			auto l4 = pathdata.size();
+			newpmap.push_back({{l1,l2},{l3,l4}});
+			src+=v.length();
+		} else {
+			if (c != path[src]) return false;
+			src++;
+			prn++;
+		}
+	}
+	path = path.substr(src);
+	for (const auto &x: newpmap) {
+		Item itm = {
+				std::string_view(pathdata.data()+x.first.first, x.first.second-x.first.first),
+				std::string_view(pathdata.data()+x.second.first, x.second.second-x.second.first)
+		};
+		auto itr = std::lower_bound(pmap.begin(), pmap.end(), itm, &orderItems);
+		pmap.insert(itr, itm);
+	}
+	return true;
+
+
+}
+
+PathAndQueryParser::PathAndQueryParser(std::string_view vpath, const std::string_view &pathPattern)
+:QueryParser(vpath)
+{
+	path_valid = parsePath(pathPattern);
+
 }
 
 }

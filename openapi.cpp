@@ -1,0 +1,470 @@
+/*
+ * openapi.cpp
+ *
+ *  Created on: 27. 10. 2021
+ *      Author: ondra
+ */
+
+
+#include "openapi.h"
+
+#include <sstream>
+
+namespace userver {
+OpenAPIServer::PathInfo OpenAPIServer::PathInfo::handler(
+		Handler &&handler) {
+	std::string path = owner.paths[pathIndex].path;
+	auto varpos = path.find("/{");
+	if (varpos == path.npos) {
+		owner.HttpServer::addPath(path, [handler = std::move(handler), me = PathInfo(*this)](PHttpServerRequest &req, const std::string_view &vpath){
+			if (!me.owner.checkMethod(me.pathIndex, req)) return true;
+			QueryParser qp(vpath);
+			return handler(req, qp);
+		});
+	} else {
+		owner.HttpServer::addPath(path.substr(0,varpos), [handler = std::move(handler), me = PathInfo(*this),pattern = path.substr(varpos)](PHttpServerRequest &req, const std::string_view &vpath){
+			if (!me.owner.checkMethod(me.pathIndex, req)) return true;
+			PathAndQueryParser qp(vpath, pattern);
+			if (qp.path_valid) return handler(req, qp);
+			else return false;
+		});
+	}
+	return *this;
+}
+
+OpenAPIServer::PathInfo OpenAPIServer::PathInfo::GET(
+		const std::string_view &tag, const std::string_view &summary,
+		const std::string_view &desc,
+		const std::initializer_list<ParameterObject> &params,
+		const std::initializer_list<ResponseObject> &responses, bool security,
+		bool deprecated) {
+	owner.paths[pathIndex].GET = {std::string(tag), std::string(summary),
+			std::string(desc), params, responses, {}, "", security, deprecated};
+	return *this;
+}
+
+OpenAPIServer::PathInfo OpenAPIServer::PathInfo::PUT(
+		const std::string_view &tag, const std::string_view &summary,
+		const std::string_view &desc,
+		const std::initializer_list<ParameterObject> &params,
+		const std::string_view &body_desc,
+		const std::initializer_list<MediaObject> &requests,
+		const std::initializer_list<ResponseObject> &responses, bool security,
+		bool deprecated) {
+	owner.paths[pathIndex].PUT = {std::string(tag), std::string(summary),
+			std::string(desc), params, responses, requests, std::string(body_desc), security, deprecated};
+	return *this;
+}
+
+OpenAPIServer::PathInfo OpenAPIServer::PathInfo::POST(
+		const std::string_view &tag, const std::string_view &summary,
+		const std::string_view &desc,
+		const std::initializer_list<ParameterObject> &params,
+		const std::string_view &body_desc,
+		const std::initializer_list<MediaObject> &requests,
+		const std::initializer_list<ResponseObject> &responses, bool security,
+		bool deprecated) {
+	owner.paths[pathIndex].POST = {std::string(tag), std::string(summary),
+			std::string(desc), params, responses, requests, std::string(body_desc), security, deprecated};
+	return *this;
+}
+
+OpenAPIServer::PathInfo OpenAPIServer::PathInfo::DELETE(
+		const std::string_view &tag, const std::string_view &summary,
+		const std::string_view &desc,
+		const std::initializer_list<ParameterObject> &params,
+		const std::string_view &body_desc,
+		const std::initializer_list<MediaObject> &requests,
+		const std::initializer_list<ResponseObject> &responses, bool security,
+		bool deprecated) {
+	owner.paths[pathIndex].DELETE = {std::string(tag), std::string(summary),
+			std::string(desc), params, responses, requests, std::string(body_desc), security, deprecated};
+	return *this;
+}
+
+
+void OpenAPIServer::setInfo(InfoObject &&info) {
+	this->info = std::move(info);
+}
+
+void OpenAPIServer::addServer(ServerObject &&server) {
+	servers.push_back(std::move(server));
+}
+
+OpenAPIServer::PathInfo OpenAPIServer::addPath( const std::string_view &path) {
+	auto idx = paths.size();
+	paths.push_back({std::string(path)});
+	return PathInfo(*this, idx);
+}
+
+
+bool OpenAPIServer::checkMethod(int pathIndex, PHttpServerRequest &req) {
+	const PathReg reg = paths[pathIndex];
+	std::string_view method = req->getMethod();
+	if (method == "GET" && reg.GET.has_value()) return true;
+	if (method == "PUT" && reg.PUT.has_value()) return true;
+	if (method == "POST" && reg.POST.has_value()) return true;
+	if (method == "DELETE" && reg.DELETE.has_value()) return true;
+	std::string allowed;
+	if (reg.GET.has_value()) allowed.append(", GET");
+	if (reg.PUT.has_value()) allowed.append(", PUT");
+	if (reg.POST.has_value()) allowed.append(", POST");
+	if (reg.DELETE.has_value()) allowed.append(", DELETE");
+	if (allowed.empty()) {
+		req->sendErrorPage(500);
+		return false;
+	}
+	req->set("Allow", std::string_view(allowed).substr(2));
+	req->sendErrorPage(405);
+	return false;
+}
+
+
+std::string OpenAPIServer::generateDef() {
+	std::ostringstream out;
+	generateDef(out);
+	return out.str();
+
+}
+
+class Str {
+public:
+	Str(std::string_view txt):txt(txt) {}
+	template<typename Stream>
+	friend Stream &operator<<(Stream &stream, const Str &str) {
+		stream.put('"');
+		for (char c: str.txt) {
+			switch (c) {
+			case '\n': stream<<"\\n";break;
+			case '\r': stream<<"\\r";break;
+			case '\t': stream<<"\\t";break;
+			case '\b': stream<<"\\b";break;
+			case '\a': stream<<"\\a";break;
+			case '\0': stream<<"\\u0000";break;
+			case '\\':  stream<<"\\\\";break;
+			case '/':  stream<<"\\/";break;
+			case '"':  stream<<"\\\"";break;
+			default: if (c >= 32) stream.put(c);break;
+			}
+		}
+		stream.put('"');
+		return stream;
+	}
+protected:
+	std::string_view txt;
+};
+
+namespace _undefined {
+
+class Arr;
+
+
+
+class Obj {
+public:
+	Obj(std::ostream &out):out(out) {out << "{";}
+	~Obj() {out << "}";}
+
+	Obj &operator()(std::string_view k,const char * v) {
+		return this->operator ()(k, std::string_view(v));
+	}
+	Obj &operator()(std::string_view k,std::string_view v) {
+		if (sep) out << ",";
+		sep = true;
+		out << Str(k) << ":" << Str(v);
+		return *this;
+	}
+	Obj &operator()(std::string_view k,double v) {
+		if (sep) out << ",";
+		sep = true;
+		out << Str(k) << ":" << v;
+		return *this;
+	}
+	Obj &operator()(std::string_view k,int v) {
+		if (sep) out << ",";
+		sep = true;
+		out << Str(k) << ":" << v;
+		return *this;
+	}
+	Obj &operator()(std::string_view k,bool v) {
+		if (sep) out << ",";
+		sep = true;
+		out << Str(k) << ":" << (v?"true":"false");
+		return *this;
+	}
+	Obj &operator()(std::string_view k,std::nullptr_t) {
+		if (sep) out << ",";
+		sep = true;
+		out << Str(k) << ":" << "null";
+		return *this;
+	}
+	Obj object(std::string_view k) {
+		if (sep) out << ",";
+		sep = true;
+		out << Str(k) << ":";
+		return Obj(out);
+	}
+	Arr array(std::string_view k);
+
+protected:
+	std::ostream &out;
+	bool sep = false;
+};
+
+class Arr {
+public:
+	Arr(std::ostream &out):out(out) {out << "[";}
+	~Arr() {out << "]";}
+
+	Arr &operator <<(const std::string_view &str) {
+		if (sep) out << ",";
+		sep = true;
+		out << Str(str);
+		return *this;
+	}
+	Arr &operator <<(double v) {
+		if (sep) out << ",";
+		sep = true;
+		out << v;
+		return *this;
+	}
+	Arr &operator <<(int v) {
+		if (sep) out << ",";
+		sep = true;
+		out << v;
+		return *this;
+	}
+	Arr &operator <<(bool v) {
+		if (sep) out << ",";
+		sep = true;
+		out << (v?"true":"false");
+		return *this;
+	}
+	Arr &operator <<(std::nullptr_t) {
+		if (sep) out << ",";
+		sep = true;
+		out << "null";
+		return *this;
+	}
+	Obj object() {
+		if (sep) out << ",";
+		sep = true;
+		return Obj(out);
+	}
+
+	Arr array() {
+		if (sep) out << ",";
+		sep = true;
+		return Arr(out);
+	}
+
+protected:
+	std::ostream &out;
+	bool sep = false;
+};
+
+Arr Obj::array(std::string_view k) {
+	if (sep) out << ",";
+	sep = true;
+	out << Str(k) << ":";
+	return Arr(out);
+
+}
+
+}
+
+static std::string generateOpID(std::string path, std::string method) {
+	std::string ret;
+	ret.reserve(path.length()+method.length()+3);
+	for (char c:path) if (isalnum(c)) ret.push_back(c); else ret.push_back('_');
+	ret.push_back('_');
+	for (char c:method) if (isalnum(c)) ret.push_back(c); else ret.push_back('_');
+	return ret;
+
+}
+
+void OpenAPIServer::generateDef(std::ostream &out) {
+	using namespace _undefined;
+	Obj root(out);
+	root("openapi","3.0.3");
+	{
+		Obj jinfo (root.object("info"));
+		jinfo("description",info.description);
+		jinfo("version",info.version);
+		jinfo("title",info.title);
+		jinfo("termsOfService",info.termsOfService);
+		{
+			Obj contact(jinfo.object("contact"));
+			if (!info.contact_email.empty()) contact("email", info.contact_email);
+			if (!info.contact_name.empty()) contact("name", info.contact_name);
+			if (!info.contact_url.empty()) contact("url", info.contact_url);
+		}
+
+	}
+	{
+		Obj paths(root.object("paths"));
+		for (const auto &p: this->paths) {
+			Obj curpath( paths.object(p.path));
+			if (p.GET.has_value()) serialize(curpath.object("get"), *p.GET, generateOpID(p.path, "get"));
+			if (p.PUT.has_value()) serialize(curpath.object("put"), *p.PUT, generateOpID(p.path, "put"));
+			if (p.POST.has_value()) serialize(curpath.object("post"), *p.POST, generateOpID(p.path, "post"));
+			if (p.DELETE.has_value()) serialize(curpath.object("delete"), *p.DELETE, generateOpID(p.path, "delete"));
+		}
+	}
+}
+
+template<typename Sch>
+void OpenAPIServer::serializeSchema(_undefined::Obj &&obj, const Sch &param) {
+	using namespace _undefined;
+	std::string_view type = param.type;
+	obj("description", param.description);
+	obj("title", param.name);
+	if (type == "assoc") {
+		obj("type","object");
+		Obj prop (obj.object("additionalProperties"));
+		Arr anyOf (prop.array("anyOf"));
+		for (const auto &c: param.properties) {
+			serializeSchema(anyOf.object(), c);
+		}
+		return;
+	} else if (type == "anyOf" || type == "allOf" || type == "oneOf") {
+		Arr a (obj.array(type));
+		auto iter = std::find_if(param.properties.begin(), param.properties.end(),[](const SchemaItem &p){
+			return p.type == "null";
+		});
+		if (iter != param.properties.end()) {
+			obj("nullable",true);
+			for (const auto &c: param.properties) {
+				if (&c != &(*iter)) {
+					serializeSchema(a.object(), c);
+				}
+			}
+		} else {
+			for (const auto &c: param.properties) {
+				serializeSchema(a.object(), c);
+			}
+		}
+		return;
+	} else if (type == "int32") {
+		obj("type","integer");
+		obj("format","int32");
+	} else if (type == "int64" || type == "integer") {
+		obj("type","integer");
+		obj("format","int64");
+	} else if (type == "number" || type == "double") {
+		obj("type","number");
+		obj("format","double");
+	} else if (type == "float") {
+		obj("type","number");
+		obj("format","float");
+	} else if (type == "boolean") {
+		obj("type","boolean");
+	} else if (type == "string") {
+		obj("type","string");
+	} else if (type == "base64") {
+		obj("type","string");
+		obj("format","base64");
+	} else if (type == "date") {
+		obj("type","string");
+		obj("format","date");
+	} else if (type == "date-time") {
+		obj("type","string");
+		obj("format","date-time");
+	} else if (type == "binary") {
+		obj("type","string");
+		obj("format","binary");
+	} else if (type == "object") {
+		obj("type","object");
+		if (!param.properties.empty()) {
+			Obj prop(obj.object("properties"));
+			for (const auto c: param.properties) {
+				Obj n(prop.object(c.name));
+				serializeSchema(std::move(n), c);
+			}
+		}
+	} else if (type == "array") {
+		obj("type","array");
+		Obj items(obj.object("items"));
+		if (!param.properties.empty()) {
+			if (param.properties.size()==1) {
+				serializeSchema(std::move(items), param.properties[0]);
+			} else {
+				Arr anyOf(items.array("anyOf"));
+				for (const auto c: param.properties) {
+					serializeSchema(anyOf.object(), c);
+				}
+			}
+		}
+	}
+}
+
+
+void OpenAPIServer::serialize(_undefined::Obj &&obj, const ParameterObject &param) {
+	obj("name", param.name)
+	   ("in", param.in)
+	   ("required", param.required)
+	   ("description", param.description);
+	serializeSchema(obj.object("schema"), param);
+}
+
+void OpenAPIServer::serialize(_undefined::Obj &&obj, const OperationStruct &op, const std::string &opid) {
+	using namespace _undefined;
+	obj.array("tags") << op.tag;
+	obj("summary", op.summary);
+	obj("operationId", opid);
+	if (!op.params.empty())
+	{
+		Arr params(obj.array("parameters"));
+		for (const auto &p: op.params){
+			serialize(params.object(),p);
+		}
+	}
+	if (!op.requests.empty())
+	{
+		Obj rq(obj.object("requestBody"));
+		rq("description", op.body_desc);
+		rq("required",true);
+		Obj ctn(rq.object("content"));
+		for (const MediaObject &m: op.requests) {
+			Obj n(ctn.object(m.content_type));
+			serializeSchema(n.object("schema"), m);
+		}
+	}
+	{
+		Obj rsp(obj.object("responses"));
+		for (const ResponseObject &r: op.responses) {
+			Obj n(rsp.object(std::to_string(r.status_code)));
+			n("description", r.description);
+			if (!r.headers.empty()) {
+				Obj hlist(n.object("headers"));
+				for (const ParameterObject &p: r.headers) {
+					Obj h(hlist.object(p.name));
+					h("description", p.description);
+					serializeSchema(h.object("schema"), p);
+				}
+			}
+			if (!r.response.empty()) {
+				Obj content(n.object("content"));
+				for(const MediaObject &m: r.response) {
+					Obj n(content.object(m.content_type));
+					serializeSchema(n.object("schema"), m);
+				}
+			}
+		}
+	}
+	if (!op.security) {
+		obj.array("security");
+	}
+}
+
+void OpenAPIServer::addSwagFilePath(const std::string &path) {
+	addPath(path, [&](PHttpServerRequest &req, const std::string_view &) {
+
+		req->setContentType("application/json");
+		req->send(generateDef());
+		return true;
+
+	});
+}
+
+}
