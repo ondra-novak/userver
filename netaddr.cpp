@@ -59,7 +59,7 @@ public:
 #ifndef _WIN32
 class NetAddrUnix: public NetAddrBase<sockaddr_un> {
 public:
-	using NetAddrBase<sockaddr_un>::NetAddrBase;
+	NetAddrUnix(const sockaddr_un &item, int perm):NetAddrBase<sockaddr_un>(item),permission(perm) {}
 	NetAddrUnix(const std::string_view &addr);
 
 	virtual std::string toString(bool resolve = false) const override;
@@ -67,7 +67,7 @@ public:
 	virtual int connect() const override;
 	virtual int bindUDP() const override;
 	virtual std::unique_ptr<INetAddr> clone() const override {
-		return std::make_unique<NetAddrUnix>(addr);
+		return std::make_unique<NetAddrUnix>(addr,permission);
 	}
 protected:
 	int permission;
@@ -85,6 +85,29 @@ void INetAddr::error(const INetAddr *addr, int errnr, const char *desc) {
 	error(addr->toString(true), errnr, desc);
 }
 
+
+NetAddrList NetAddr::fromStringMulti(const std::string_view &addr_str, const std::string_view &default_svc) {
+	std::string blok;
+	NetAddrList out;
+	auto appendBlok=[&]{
+		if (!blok.empty()) {
+			auto n = fromString(blok, default_svc);
+			for (auto &x: n) {
+				out.push_back(std::move(x));
+			}
+		}
+	};
+	for (char c: addr_str) {
+		if (isspace(c)) {
+			appendBlok();
+			blok.clear();
+		} else{
+			blok.push_back(c);
+		}
+	}
+	appendBlok();
+	return out;
+}
 
 NetAddrList NetAddr::fromString(const std::string_view &addr_str, const std::string_view &default_svc) {
 	std::string name;
@@ -163,7 +186,7 @@ NetAddr& NetAddr::operator =(NetAddr &&other) {
 NetAddr NetAddr::fromSockAddr(const sockaddr &addr) {
 	switch (addr.sa_family) {
 #ifndef _WIN32
-	case AF_UNIX: return NetAddr(std::make_unique<NetAddrUnix>(reinterpret_cast<const sockaddr_un &>(addr)));
+	case AF_UNIX: return NetAddr(std::make_unique<NetAddrUnix>(reinterpret_cast<const sockaddr_un &>(addr),0600));
 #endif
 	case AF_INET: return NetAddr(std::make_unique<NetAddrIPv4>(reinterpret_cast<const sockaddr_in &>(addr)));
 	case AF_INET6: return NetAddr(std::make_unique<NetAddrIPv6>(reinterpret_cast<const sockaddr_in6 &>(addr)));
@@ -376,12 +399,15 @@ std::string NetAddrUnix::toString(bool ) const {
 }
 
 int NetAddrUnix::listen() const {
-	if (access(addr.sun_path, 0)) {
+	if (access(addr.sun_path, 0) == 0) {
+		bool attempt = true;
 		try {
 			int s = connect();
+			attempt = false;
 			close(s);
 			error(this, EBUSY, "listen()");
 		} catch(...) {
+			if (!attempt) throw;
 			unlink(addr.sun_path);
 		}
 	}

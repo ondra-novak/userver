@@ -201,7 +201,7 @@ void SSLSocket::handleStateAsync(int r, int tm, Fn &&fn) {
 
 
 void SSLSocket::waitConnect(int tm, userver::CallbackT<void(bool)> &&cb) {
-	int r;
+	int r = 0;
 	{
 		std::lock_guard _(ssl_lock);
 		if (connState != ConnState::not_connected) {

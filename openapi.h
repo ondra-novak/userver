@@ -161,6 +161,7 @@ public:
 	std::string generateDef();
 
 	void addSwagFilePath(const std::string &path);
+	void addSwagBrowser(const std::string &path);
 
 
 protected:

@@ -71,6 +71,7 @@ public:
 	NetAddr &operator=(NetAddr &&other);
 
 	static NetAddrList fromString(const std::string_view &addr_str, const std::string_view &default_svc = std::string_view());
+	static NetAddrList fromStringMulti(const std::string_view &addr_str, const std::string_view &default_svc = std::string_view());
 	static NetAddr fromSockAddr(const sockaddr &addr);
 
 	socklen_t getAddrLen() const {return addr->getAddrLen();}

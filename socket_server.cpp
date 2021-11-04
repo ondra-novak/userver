@@ -26,7 +26,7 @@ SocketServer::SocketServer(const NetAddrList &addrLst) {
 		try {
 			fds.push_back(a.listen());
 		} catch (...) {
-			if (e != nullptr) e = std::current_exception();
+			if (e == nullptr) e = std::current_exception();
 		}
 	}
 	if (fds.empty()) {
