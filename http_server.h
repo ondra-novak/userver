@@ -271,12 +271,24 @@ class HttpServerMapper {
 public:
 
 	HttpServerMapper();
+	virtual ~HttpServerMapper();
+
 	using Handler = CallbackT<bool(PHttpServerRequest &, const std::string_view &)>;
 
 	void addPath(const std::string_view &path, Handler &&handler);
 //	void serve(Stream &&stream);
 
-	bool execHandler(PHttpServerRequest &req, const std::string_view &vpath);
+	///Search for handler
+	/**
+	 * Uses vpath to search handler. Executes the handler
+	 * @param req http request
+	 * @param vpath vpath
+	 * @retval true execution complete (regadless on whether it was successful or not)
+	 * @retval false no handler found. The state of the request is not affected
+	 *
+	 * @note function is virtual, you can modify process of searching correct handler
+	 */
+	virtual bool execHandler(PHttpServerRequest &req, const std::string_view &vpath);
 	///Automatically detect prefix on given host
 	/**
 	 * @param req request as r-value, it is moved to the handler, when true is returned
@@ -287,8 +299,9 @@ public:
 	 * mapping on proxy server without path transformation. Detection is done by removing
 	 * prefixes until the handler process the request. Then the mapping is remembered
 	 *
+	 * @note function is virtual, you can modify process of searching correct handler
 	 */
-	bool execHandlerByHost(PHttpServerRequest &req);
+	virtual bool execHandlerByHost(PHttpServerRequest &req);
 
 protected:
 

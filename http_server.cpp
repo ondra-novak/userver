@@ -1213,4 +1213,6 @@ bool HttpServerRequest::allowMethods(std::initializer_list<std::string_view> met
 	}
 }
 
+HttpServerMapper::~HttpServerMapper() {}
+
 }

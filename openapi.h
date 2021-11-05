@@ -107,7 +107,7 @@ public:
 
 	class PathInfo {
 	public:
-		PathInfo(OpenAPIServer &owner, int pathIndex):owner(owner),pathIndex(pathIndex) {}
+		PathInfo(OpenAPIServer &owner, int pathIndex, int methodIndex):owner(owner),pathIndex(pathIndex), methodIndex(methodIndex) {}
 
 		PathInfo handler(Handler &&handler);
 		PathInfo GET(const std::string_view &tag,
@@ -150,6 +150,7 @@ public:
 	protected:
 		OpenAPIServer &owner;
 		int pathIndex;
+		int methodIndex;
 	};
 
 
@@ -162,7 +163,6 @@ public:
 
 	void addSwagFilePath(const std::string &path);
 	void addSwagBrowser(const std::string &path);
-
 
 protected:
 
@@ -196,6 +196,75 @@ protected:
 	static void serialize(_undefined::Obj &&obj, const ParameterObject &param);
 	template<typename Sch>
 	static void serializeSchema(_undefined::Obj &&obj, const Sch &param);
+
+	using VarList = std::vector<std::pair<std::string_view, std::string_view> >;
+
+	enum class Method {
+		GET=0,
+		PUT=1,
+		POST=2,
+		DELETE=3,
+		count=4
+	};
+
+	struct PathTreeItem {
+		bool has_handler = false;
+		///handle responsible to execute on this node
+		///can be null, if no handler
+		Handler h[static_cast<int>(Method::count)];
+		///map for all branches from this path
+		std::map<std::string, PathTreeItem, std::less<> > branches;
+		///map of braches with variables
+		std::vector<std::pair<std::string, PathTreeItem> > variables;
+
+		static std::string_view extractPath(std::string_view &vpath) {
+			auto nps = vpath.find('/',1);
+			std::string_view item;
+			if (nps == vpath.npos) {
+				item = vpath.substr(1);
+				vpath = "";
+			} else {
+				item = vpath.substr(1,nps-1);
+				vpath = vpath.substr(nps);
+			}
+			return item;
+
+		}
+
+		///Walk structure and search handler
+		/**
+		 * @param vpath to search
+		 * @param vars current list extracted variables - in order of variables in path
+		 * @param cb callback
+		 *
+		 * @note the callback receives (handler, vars)
+		 */
+		template<typename CB>
+		bool findPath(std::string_view vpath, VarList &vars,CB &&cb) const {
+			if (vpath.empty() || vpath[0] != '/' || vpath == "/") {
+				if (!has_handler) return false;
+				return cb(*this, vars);
+			} else {
+				auto item = extractPath(vpath);
+				auto iter = branches.find(item);
+				if (iter != branches.end() && iter->second.findPath(vpath, vars, std::forward<CB>(cb))) return true;
+				for (const auto &v: variables) {
+					vars.push_back(std::pair<std::string_view,std::string_view>(v.first, item));
+					if (v.second.findPath(vpath, vars, cb)) return true;
+				}
+				return false;
+			}
+		}
+		bool addHandler(Method m, std::string_view vpath, Handler &&h);
+	};
+
+	PathTreeItem root;
+
+	virtual bool execHandler(userver::PHttpServerRequest &req, const std::string_view &vpath);
+
+	class QueryParserWithVars;
+
+
 };
 
 

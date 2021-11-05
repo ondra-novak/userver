@@ -11,26 +11,6 @@
 #include <sstream>
 
 namespace userver {
-OpenAPIServer::PathInfo OpenAPIServer::PathInfo::handler(
-		Handler &&handler) {
-	std::string path = owner.paths[pathIndex].path;
-	auto varpos = path.find("/{");
-	if (varpos == path.npos) {
-		owner.HttpServer::addPath(path, [handler = std::move(handler), me = PathInfo(*this)](PHttpServerRequest &req, const std::string_view &vpath){
-			if (!me.owner.checkMethod(me.pathIndex, req)) return true;
-			QueryParser qp(vpath);
-			return handler(req, qp);
-		});
-	} else {
-		owner.HttpServer::addPath(path.substr(0,varpos), [handler = std::move(handler), me = PathInfo(*this),pattern = path.substr(varpos)](PHttpServerRequest &req, const std::string_view &vpath){
-			if (!me.owner.checkMethod(me.pathIndex, req)) return true;
-			PathAndQueryParser qp(vpath, pattern);
-			if (qp.path_valid) return handler(req, qp);
-			else return false;
-		});
-	}
-	return *this;
-}
 
 OpenAPIServer::PathInfo OpenAPIServer::PathInfo::GET(
 		const std::string_view &tag, const std::string_view &summary,
@@ -40,7 +20,7 @@ OpenAPIServer::PathInfo OpenAPIServer::PathInfo::GET(
 		bool deprecated) {
 	owner.paths[pathIndex].GET = {std::string(tag), std::string(summary),
 			std::string(desc), params, responses, {}, "", security, deprecated};
-	return *this;
+	return PathInfo(owner,pathIndex,static_cast<int>(Method::GET));
 }
 
 OpenAPIServer::PathInfo OpenAPIServer::PathInfo::PUT(
@@ -53,7 +33,7 @@ OpenAPIServer::PathInfo OpenAPIServer::PathInfo::PUT(
 		bool deprecated) {
 	owner.paths[pathIndex].PUT = {std::string(tag), std::string(summary),
 			std::string(desc), params, responses, requests, std::string(body_desc), security, deprecated};
-	return *this;
+	return PathInfo(owner,pathIndex,static_cast<int>(Method::PUT));
 }
 
 OpenAPIServer::PathInfo OpenAPIServer::PathInfo::POST(
@@ -66,7 +46,7 @@ OpenAPIServer::PathInfo OpenAPIServer::PathInfo::POST(
 		bool deprecated) {
 	owner.paths[pathIndex].POST = {std::string(tag), std::string(summary),
 			std::string(desc), params, responses, requests, std::string(body_desc), security, deprecated};
-	return *this;
+	return PathInfo(owner,pathIndex,static_cast<int>(Method::POST));
 }
 
 OpenAPIServer::PathInfo OpenAPIServer::PathInfo::DELETE(
@@ -79,7 +59,7 @@ OpenAPIServer::PathInfo OpenAPIServer::PathInfo::DELETE(
 		bool deprecated) {
 	owner.paths[pathIndex].DELETE = {std::string(tag), std::string(summary),
 			std::string(desc), params, responses, requests, std::string(body_desc), security, deprecated};
-	return *this;
+	return PathInfo(owner,pathIndex,static_cast<int>(Method::DELETE));
 }
 
 
@@ -94,7 +74,7 @@ void OpenAPIServer::addServer(ServerObject &&server) {
 OpenAPIServer::PathInfo OpenAPIServer::addPath( const std::string_view &path) {
 	auto idx = paths.size();
 	paths.push_back({std::string(path)});
-	return PathInfo(*this, idx);
+	return PathInfo(*this, idx,-1);
 }
 
 
@@ -539,5 +519,120 @@ void OpenAPIServer::addSwagBrowser(const std::string &path) {	;
 	});
 	addSwagFilePath(path+"/swagger.json");
 }
+
+bool OpenAPIServer::PathTreeItem::addHandler(Method m, std::string_view vpath, Handler &&h) {
+				if (vpath.empty() || vpath[0] != '/' || vpath == "/") {
+					has_handler = true;
+					this->h[static_cast<int>(m)] = std::move(h);
+					return true;
+				} else {
+					auto item = extractPath(vpath);
+					if (!item.empty() && item[0] == '{' && item.back() == '}') {
+						auto varname = item.substr(1,item.size()-2);
+						auto iter = std::find_if(variables.begin(), variables.end(), [&](const auto &p){
+							return p.first == varname;
+						});
+						if (iter != variables.end()) return iter->second.addHandler(m, vpath, std::move(h));
+						else {
+							auto cnt = variables.size();
+							variables.push_back(std::pair(std::string(varname), PathTreeItem()));
+							return variables[cnt].second.addHandler(m, vpath, std::move(h));
+						}
+					} else {
+						auto iter = branches.find(item);
+						if (iter != branches.end()) {
+							return iter->second.addHandler(m, vpath, std::move(h));
+						} else {
+							return branches[std::string(item)].addHandler(m, vpath, std::move(h));
+						}
+					}
+				}
+			}
+
+static std::string_view methodList[] = {
+		"GET","PUT","POST","DELETE"
+};
+
+class OpenAPIServer::QueryParserWithVars: public QueryParser {
+public:
+	QueryParserWithVars(const VarList &vlist, std::string_view query);
+
+protected:
+	std::string buffer;
+
+
+};
+
+bool OpenAPIServer::execHandler(userver::PHttpServerRequest &req, const std::string_view &vpath) {
+	VarList vars;
+	std::string_view path, query;
+	auto splt = vpath.find('?');
+	if (splt == vpath.npos) {
+		path = vpath;
+	} else {
+		path = vpath.substr(splt);
+		query = vpath.substr(splt+1);
+	}
+	return root.findPath(vpath, vars, [&](const PathTreeItem &itm, const VarList &vars) {
+
+		auto m = req->getMethod();
+		auto iter = std::find(std::begin(methodList), std::end(methodList), m);
+		if (iter != std::end(methodList)) {
+			int idx = std::distance(std::begin(methodList),iter);
+			if (itm.h[idx] != nullptr) {
+				return itm.h[idx](req, QueryParserWithVars(vars, query));
+			}
+		}
+		std::string methods;
+		for (int i = 0; i < static_cast<int>(Method::count); i++) {
+			if (itm.h[i] != nullptr) {
+				methods.append(", ");
+				methods.append(methodList[i]);
+			}
+		}
+		if (!methods.empty()) {
+			req->set("Allow", std::string_view(methods).substr(2));
+		}
+		req->sendErrorPage(405);
+		return true;
+	}) || HttpServer::execHandler(req, vpath);
+
+}
+
+inline OpenAPIServer::QueryParserWithVars::QueryParserWithVars(const VarList &vlist, std::string_view query) {
+	parse(query, true);
+	std::vector<std::pair<std::pair<int, int>,std::pair<int, int> > > varindex;
+	for (const auto &v: vlist) {
+		int l1 = buffer.length();
+		buffer.push_back('#');
+		buffer.append(v.first);
+		int l2 = buffer.length();
+		buffer.push_back(0);
+		int l3 = buffer.length();
+		this->urlDecode(v.second, buffer);
+		int l4 = buffer.length();
+		buffer.push_back(0);
+		varindex.push_back({{l1,l2-l1},{l3,l4-l3}});
+	}
+	std::string_view bufview(buffer);
+	if (!varindex.empty()) {
+		for (const auto &d: varindex) {
+			pmap.push_back({bufview.substr(d.first.first, d.first.second), bufview.substr(d.second.first, d.second.second)});
+		}
+		std::sort(pmap.begin(),pmap.end(),&orderItems);
+	}
+}
+
+OpenAPIServer::PathInfo OpenAPIServer::PathInfo::handler(Handler &&handler) {
+	if (methodIndex < 0) {
+		throw std::runtime_error("OpenAPI annotation, handler without method: " + owner.paths[pathIndex].path);
+	}
+	else {
+		owner.root.addHandler(static_cast<Method>(methodIndex), owner.paths[pathIndex].path, std::move(handler));
+	}
+	return *this;
+}
+
+
 
 }
