@@ -72,7 +72,7 @@ protected:
 	PSSL_CTX ctx;
 	PSSL ssl;
 	Mode mode;
-	std::mutex ssl_lock;
+	std::recursive_mutex ssl_lock;
 	bool tm = false;
 	ConnState connState = ConnState::not_connected;
 

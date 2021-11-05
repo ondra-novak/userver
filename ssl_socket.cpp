@@ -20,14 +20,14 @@ SSLSocket::SSLSocket(Socket &&s, const PSSL_CTX &ctx, Mode mode)
 		if (ssl == nullptr) {
 			throw SSLError();
 		}
-		if (!SSL_set_fd(ssl.get(), s.getHandle())) {
+		if (!SSL_set_fd(ssl.get(), this->s.getHandle())) {
 			throw SSLError();
 		}
 
-		switch (mode) {
+/*		switch (mode) {
 		case Mode::connect: SSL_set_connect_state(ssl.get());break;
 		case Mode::accept: SSL_set_accept_state(ssl.get());break;
-		}
+		}*/
 }
 
 SSLSocket::~SSLSocket() {
@@ -174,13 +174,15 @@ void SSLSocket::handleStateAsync(int r, int tm, Fn &&fn) {
 					AsyncResource(AsyncResource::write, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool succ) mutable {
 							fn(succ?State::retry:State::timeout);
 					},
-					std::chrono::system_clock::now() + std::chrono::milliseconds(tm)
+					tm<0?std::chrono::system_clock::time_point::max()
+							:std::chrono::system_clock::now() + std::chrono::milliseconds(tm)
 			);break;
 		case SSL_ERROR_WANT_READ:
 			getCurrentAsyncProvider().runAsync(
 					AsyncResource(AsyncResource::read, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool succ) mutable {
 						fn(succ?State::retry:State::timeout);},
-					std::chrono::system_clock::now() + std::chrono::milliseconds(tm)
+					tm<0?std::chrono::system_clock::time_point::max()
+							:std::chrono::system_clock::now() + std::chrono::milliseconds(tm)
 			);break;
 		case SSL_ERROR_SYSCALL: {
 			std::lock_guard _(ssl_lock);
@@ -206,6 +208,7 @@ void SSLSocket::waitConnect(int tm, userver::CallbackT<void(bool)> &&cb) {
 		std::lock_guard _(ssl_lock);
 		if (connState != ConnState::not_connected) {
 			cb(connState == ConnState::connected);
+			return;
 		}
 		switch (mode) {
 			case Mode::connect: r = SSL_connect(ssl.get());break;
@@ -316,7 +319,9 @@ void SSLSocket::read(void *buffer, std::size_t size, userver::CallbackT<void(int
 			}
 		});
 	} else {
-		getCurrentAsyncProvider().runAsync([fn = std::move(fn),r]{fn(r);});
+		getCurrentAsyncProvider().runAsync([fn = std::move(fn),r]{
+			fn(r);
+		});
 	}
 }
 
@@ -339,7 +344,9 @@ void SSLSocket::write(const void *buffer, std::size_t size, userver::CallbackT<v
 			}
 		});
 	} else {
-		getCurrentAsyncProvider().runAsync([fn = std::move(fn),r]{fn(r);});
+		getCurrentAsyncProvider().runAsync([fn = std::move(fn),r]{
+			fn(r);
+		});
 	}
 
 }

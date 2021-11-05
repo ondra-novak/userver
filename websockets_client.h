@@ -34,7 +34,7 @@ inline std::unique_ptr<WSStream> wsConnect(HttpClient &httpclient, const HttpCli
 
 template<typename Fn>
 void wsConnectAsync(HttpClient &httpclient, const HttpClient::URL &url, Fn &&callback) {
-	httpclient.open("GET", url, [callback = std::forward<Fn>(callback)](std::unique_ptr<HttpClientRequest> &&req){
+	httpclient.open("GET", url, [callback = std::forward<Fn>(callback)](std::unique_ptr<HttpClientRequest> &&req) mutable {
 		if (req == nullptr) {
 			callback(0, nullptr);
 		} else {
@@ -43,7 +43,7 @@ void wsConnectAsync(HttpClient &httpclient, const HttpClient::URL &url, Fn &&cal
 			req->addHeader("Sec-WebSocket-Version","13");
 			req->addHeader("Sec-WebSocket-Key","dGhlIHNhbXBsZSBub25jZQ==");
 			auto r = req.get();
-			r->sendAsync([callback = std::forward<Fn>(callback), req = std::move(req)](int status){
+			r->sendAsync([callback = std::forward<Fn>(callback), req = std::move(req)](int status) mutable {
 				if (status != 101) callback(status, nullptr);
 				if (req->get("Upgrade") != "websocket") callback(-1,nullptr);
 				callback(status, std::make_unique<WSStream>(std::move(req->getStream()), true));

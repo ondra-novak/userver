@@ -46,6 +46,10 @@ void HttpClientRequest::addHeader(const std::string_view &key,
 		has_te = true;
 		has_te_chunked = HeaderValue::iequal(value,"chunked");
 	}
+	if (HeaderValue::iequal(key,"Upgrade")) {
+		has_te = true;
+		has_te_chunked = false;
+	}
 	addHeaderInternal(key, value);
 }
 
@@ -139,8 +143,8 @@ void HttpClientRequest::prepareUserStream() {
 void HttpClientRequest::sendAsync(CallbackT<void(int)> &&cb) {
 	if (!header_sent) finish_headers(true);
 	userStream.reset();
-	s.flushAsync([this, cb = std::move(cb)](bool error) mutable {
-		if (error) {
+	s.flushAsync([this, cb = std::move(cb)](bool ok) mutable {
+		if (!ok) {
 			status = -1;
 			cb(status);
 		} else {
@@ -353,7 +357,7 @@ void HttpClient::open(const Method &method, const URL &url,Callback  &&callback)
 		auto cu = crackUrl(clousure->url);
 		if (!cu.valid) clousure->cb(nullptr);
 		connectAsync(resolve(cu),std::move(cu), [this, cu, clousure = std::move(clousure)](std::unique_ptr<ISocket> &&socket){
-			if (socket!=nullptr) {
+			if (socket==nullptr) {
 				clousure->cb(nullptr);
 			} else {
 				Stream stream(new SocketStream(std::move(socket)));
@@ -373,7 +377,7 @@ HttpClient::CrackedURL HttpClient::crackUrl(const std::string_view &url) {
 	CrackedURL cu;
 	if (HeaderValue::iequal(url.substr(0,7), "http://")) {
 		rest = url.substr(7);
-	} else if (HeaderValue::iequal(url.substr(0,7), "https://")) {
+	} else if (HeaderValue::iequal(url.substr(0,8), "https://")) {
 		cu.ssl = true;
 		rest = url.substr(8);
 	} else {
