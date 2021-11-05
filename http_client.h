@@ -146,6 +146,13 @@ public:
 	///Retrieves stream to response
 	Stream &getResponse();
 
+	///Retrieve underlying steam
+	/** It is useful for websockets etc
+	 *
+	 * Note transfer encoding is not applied
+	 */
+	Stream &getStream();
+
 	using HeaderMap = std::vector<std::pair<std::string_view, std::string_view> >;
 	using iterator = HeaderMap::const_iterator;
 
@@ -215,8 +222,8 @@ public:
 	 * @param url url
 	 * @return connected request. If result is null, then connection cannot be established
 	 */
-	std::unique_ptr<HttpClientRequest> open(const URL &method,
-											const Method &url);
+	std::unique_ptr<HttpClientRequest> open(const Method &method,
+											const URL &url);
 
 	///Open request asynchronously
 	/**
@@ -225,7 +232,7 @@ public:
 	 * @param callback function called, when request is ready. The argument contains
 	 * connected request. If the argument is null, then connection cannot be established
 	 */
-	void open(const URL &method, const Method &url, Callback &&callback);
+	void open(const Method &method, const URL &url, Callback &&callback);
 
 	using HeaderPair = std::pair<std::string_view, std::string_view>;
 

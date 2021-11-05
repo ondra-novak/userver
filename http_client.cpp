@@ -164,6 +164,9 @@ void HttpClientRequest::sendAsync(CallbackT<void(int)> &&cb) {
 Stream& HttpClientRequest::getResponse() {
 	return *userStream;
 }
+Stream& HttpClientRequest::getStream() {
+	return s;
+}
 
 HeaderValue HttpClientRequest::get(const std::string_view &key) const {
 	auto iter = std::lower_bound(responseHeaders.begin(), responseHeaders.end(), std::pair(key,std::string_view()), HeaderValue::lessHeader);
