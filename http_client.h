@@ -199,6 +199,7 @@ struct HttpClientCfg {
 
 	std::string userAgent;
 	int connectTimeout = 30000;
+	int iotimeout =30000;
 	CallbackT<PSocket(const NetAddr &, const std::string_view &host)> connect = nullptr;
 	CallbackT<PSocket(const NetAddr &, const std::string_view &host)> sslConnect = nullptr;
 	CallbackT<NetAddrList(const std::string_view &)> resolve = nullptr;

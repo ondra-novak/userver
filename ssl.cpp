@@ -52,26 +52,7 @@ public:
 		auto ssl = sslsock->getSSLSocket();
 		if(!SSL_set_tlsext_host_name(ssl, host.c_str())) throw SSLError();
 		if(!X509_VERIFY_PARAM_set1_host(SSL_get0_param(ssl), host.c_str(), 0)) throw SSLError();
-		if (!sslsock->waitConnect(sock.getRdTimeout())) return nullptr;
-	    auto cert_res = SSL_get_verify_result(ssl);
-	    if (cert_res == X509_V_OK) return PSocket(sslsock.release());
-	    else return nullptr;
-	}
-	virtual void makeSecure(Socket &sock, const std::string &host, CallbackT<void(PSocket &&)> &&cb) override {
-		auto sslsock = std::make_unique<SSLSocket>(std::move(sock), ctx, SSLSocket::Mode::connect);
-		auto ssl = sslsock->getSSLSocket();
-		if(!SSL_set_tlsext_host_name(ssl, host.c_str())) throw SSLError();
-		if(!X509_VERIFY_PARAM_set1_host(SSL_get0_param(ssl), host.c_str(), 0)) throw SSLError();
-		auto sptr = sslsock.get();
-		sptr->waitConnect(sock.getRdTimeout(), [cb = std::move(cb), sslsock = std::move(sslsock)](bool ok) mutable {
-			if (ok) {
-				auto ssl = sslsock->getSSLSocket();
-			    auto cert_res = SSL_get_verify_result(ssl);
-			    if (cert_res == X509_V_OK) cb(PSocket(sslsock.release()));
-			    else cb(nullptr);
-			}
-
-		});
+	    return PSocket(sslsock.release());
 	}
 
 

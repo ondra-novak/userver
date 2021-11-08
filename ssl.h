@@ -19,7 +19,7 @@ public:
 	using PSocket = std::unique_ptr<ISocket>;
 
 	virtual PSocket makeSecure(Socket &sock, const std::string &host) = 0;
-	virtual void makeSecure(Socket &sock, const std::string &host, CallbackT<void(PSocket &&)> &&cb) = 0;
+
 	virtual ~AbstractSSLClientFactory() {}
 
 };
@@ -30,8 +30,9 @@ public:
 
 	using std::unique_ptr<AbstractSSLClientFactory>::unique_ptr;
 
+	///makes connected socket as secure
+	/** after this, you need to call waitForConnect() to receive whether ssl has been successful */
 	PSocket makeSecure(Socket &sock, const std::string &host) {return get()->makeSecure(sock,host);}
-	void makeSecure(Socket &sock, const std::string &host, CallbackT<void(PSocket &&)> &&cb) {get()->makeSecure(sock, host, std::move(cb));}
 };
 
 struct SSLConfig {

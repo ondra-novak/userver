@@ -288,17 +288,23 @@ std::unique_ptr<HttpClientRequest> HttpClient::DELETE(const URL &url,
 }
 
 std::unique_ptr<ISocket> HttpClient::connect(const NetAddr &addr, const CrackedURL &cu) {
+	std::unique_ptr<ISocket> s;
 	if (cu.ssl) {
 		if (cfg.sslConnect == nullptr) throw std::runtime_error("SSL is not available");
-		return cfg.sslConnect(addr, cu.host);
+		s = cfg.sslConnect(addr, cu.host);
+		return s;
 	} else {
 		if (cfg.connect != nullptr) {
-			return cfg.connect(addr, cu.host);
+			s = cfg.connect(addr, cu.host);
 		}
 		else {
-			return std::make_unique<Socket>(Socket::connect(addr));
+			s =std::make_unique<Socket>(Socket::connect(addr));
 		}
 	}
+	if (s != nullptr) {
+		s->setIOTimeout(cfg.iotimeout);
+	}
+	return s;
 }
 std::unique_ptr<HttpClientRequest> HttpClient::open(const Method &method, const URL &url) {
 
@@ -334,7 +340,9 @@ template<typename Fn>
 void HttpClient::connectAsync(NetAddrList &&list, CrackedURL &&cu, Fn &&fn, unsigned int idx) {
 	if (idx >= list.size()) fn(nullptr);
 	auto sock = connect(list[idx],cu);
+	if (sock == nullptr) fn(nullptr);
 	ISocket *s = sock.get();
+	sock->setIOTimeout(cfg.iotimeout);
 	s->waitConnect(cfg.connectTimeout, [this, sock = std::move(sock), list = std::move(list), cu = std::move(cu), fn = std::forward<Fn>(fn), idx](bool ok) mutable  {
 		if (ok) {
 			fn(std::move(sock));
@@ -353,20 +361,26 @@ void HttpClient::open(const Method &method, const URL &url,Callback  &&callback)
 												std::string(url),
 												std::move(callback)
 										})] () mutable {
-
-		auto cu = crackUrl(clousure->url);
-		if (!cu.valid) clousure->cb(nullptr);
-		connectAsync(resolve(cu),std::move(cu), [this, cu, clousure = std::move(clousure)](std::unique_ptr<ISocket> &&socket){
-			if (socket==nullptr) {
+		try {
+			auto cu = crackUrl(clousure->url);
+			if (!cu.valid) clousure->cb(nullptr);
+			NetAddrList nlist = resolve(cu);
+			connectAsync(std::move(nlist),std::move(cu), [this, cu, clousure = std::move(clousure)](std::unique_ptr<ISocket> &&socket){
+				if (socket==nullptr) {
+					clousure->cb(nullptr);
+				} else {
+					Stream stream(new SocketStream(std::move(socket)));
+					auto req = std::make_unique<HttpClientRequest>(std::move(stream));
+					req->open(clousure->method, cu.host, cu.path);
+					req->addHeader("UserAgent", cfg.userAgent);
+					clousure->cb(std::move(req));
+				}
+			},0);
+		} catch (...) {
+			if (clousure !=nullptr) {
 				clousure->cb(nullptr);
-			} else {
-				Stream stream(new SocketStream(std::move(socket)));
-				auto req = std::make_unique<HttpClientRequest>(std::move(stream));
-				req->open(clousure->method, cu.host, cu.path);
-				req->addHeader("UserAgent", cfg.userAgent);
-				clousure->cb(std::move(req));
 			}
-		},0);
+		}
 	});
 
 }

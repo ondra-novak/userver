@@ -158,77 +158,90 @@ void SSLSocket::handleStateAsync(int r, int tm, Fn &&fn) {
 		st = SSL_get_error(ssl.get(), r);
 		if (connState == ConnState::not_connected) connState  = ConnState::connected;
 	}
-	switch (st) {
-		case SSL_ERROR_NONE: fn(State::retry);break;
-		case SSL_ERROR_ZERO_RETURN:	{
-			std::lock_guard _(ssl_lock);
-			connState = ConnState::closed;
-			fn(State::eof);break;
+	try {
+		switch (st) {
+			case SSL_ERROR_NONE: fn(State::retry);break;
+			case SSL_ERROR_ZERO_RETURN:	{
+				std::lock_guard _(ssl_lock);
+				connState = ConnState::closed;
+				fn(State::eof);break;
+			}
+			case SSL_ERROR_WANT_CONNECT:
+			case SSL_ERROR_WANT_ACCEPT:
+				waitConnect(tm, [fn = std::forward<Fn>(fn)](bool ok)mutable {fn(ok?State::retry: State::timeout);});
+				break;
+			case SSL_ERROR_WANT_WRITE:
+				getCurrentAsyncProvider().runAsync(
+						AsyncResource(AsyncResource::write, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool succ) mutable {
+								fn(succ?State::retry:State::timeout);
+						},
+						tm<0?std::chrono::system_clock::time_point::max()
+								:std::chrono::system_clock::now() + std::chrono::milliseconds(tm)
+				);break;
+			case SSL_ERROR_WANT_READ:
+				getCurrentAsyncProvider().runAsync(
+						AsyncResource(AsyncResource::read, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool succ) mutable {
+							fn(succ?State::retry:State::timeout);},
+						tm<0?std::chrono::system_clock::time_point::max()
+								:std::chrono::system_clock::now() + std::chrono::milliseconds(tm)
+				);break;
+			case SSL_ERROR_SYSCALL: {
+				std::lock_guard _(ssl_lock);
+				connState = ConnState::closed;
+				int e = errno;
+				throw std::system_error(e, error_category(), "SSL_ERROR_SYSCALL");
+			}
+			case SSL_ERROR_SSL: {
+				std::lock_guard _(ssl_lock);
+				connState = ConnState::closed;
+				throw SSLError();
+			}
+			default:
+				fn(State::eof);
+				break;
 		}
-		case SSL_ERROR_WANT_CONNECT:
-		case SSL_ERROR_WANT_ACCEPT:
-			waitConnect(tm, [fn = std::forward<Fn>(fn)](bool ok)mutable {fn(ok?State::retry: State::timeout);});
-			break;
-		case SSL_ERROR_WANT_WRITE:
-			getCurrentAsyncProvider().runAsync(
-					AsyncResource(AsyncResource::write, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool succ) mutable {
-							fn(succ?State::retry:State::timeout);
-					},
-					tm<0?std::chrono::system_clock::time_point::max()
-							:std::chrono::system_clock::now() + std::chrono::milliseconds(tm)
-			);break;
-		case SSL_ERROR_WANT_READ:
-			getCurrentAsyncProvider().runAsync(
-					AsyncResource(AsyncResource::read, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool succ) mutable {
-						fn(succ?State::retry:State::timeout);},
-					tm<0?std::chrono::system_clock::time_point::max()
-							:std::chrono::system_clock::now() + std::chrono::milliseconds(tm)
-			);break;
-		case SSL_ERROR_SYSCALL: {
-			std::lock_guard _(ssl_lock);
-			connState = ConnState::closed;
-			int e = errno;
-			throw std::system_error(e, error_category(), "SSL_ERROR_SYSCALL");
-		}
-		case SSL_ERROR_SSL: {
-			std::lock_guard _(ssl_lock);
-			connState = ConnState::closed;
-			throw SSLError();
-		}
-		default:
-			fn(State::eof);
-			break;
+	} catch (...) {
+		fn(State::error);
 	}
 }
 
 
 void SSLSocket::waitConnect(int tm, userver::CallbackT<void(bool)> &&cb) {
-	int r = 0;
-	{
-		std::lock_guard _(ssl_lock);
-		if (connState != ConnState::not_connected) {
-			cb(connState == ConnState::connected);
-			return;
+	s.waitConnect(tm, [tm, this, cb = std::move(cb)](bool ok) mutable {
+		if (!ok) {
+			cb(ok);
 		}
-		switch (mode) {
-			case Mode::connect: r = SSL_connect(ssl.get());break;
-			case Mode::accept: r = SSL_accept(ssl.get());break;
-			default: cb(false);break;
-		};
-	}
+		else {
+			int r = 0;
+			{
+				std::lock_guard _(ssl_lock);
+				if (connState != ConnState::not_connected) {
+					cb(connState == ConnState::connected);
+					return;
+				}
+				switch (mode) {
+					case Mode::connect: r = SSL_connect(ssl.get());break;
+					case Mode::accept: r = SSL_accept(ssl.get());break;
+					default: cb(false);break;
+				};
+			}
 
-	if (r<0) {
-		handleStateAsync(r, tm, [cb = std::move(cb), tm, this](State st) mutable {
-			if (st == State::retry) waitConnect(tm, std::move(cb)); else cb(false);
-		});
-	} else {
-		cb(true);
-	}
+			if (r<0) {
+				handleStateAsync(r, tm, [cb = std::move(cb), tm, this](State st) mutable {
+					if (st == State::retry) waitConnect(tm, std::move(cb)); else cb(false);
+				});
+			} else {
+				cb(true);
+			}
+		}
+	});
 }
+
 
 bool SSLSocket::waitConnect(int tm) {
 	int r;
 	if (connState != ConnState::not_connected) return connState == ConnState::connected;
+	if (!s.waitConnect(tm)) return false;
 	switch (mode) {
 		case Mode::connect:
 			{
@@ -240,7 +253,10 @@ bool SSLSocket::waitConnect(int tm) {
 				std::lock_guard _(ssl_lock);
 				r = SSL_connect(ssl.get());
 			}
-			return true;
+			{
+				auto cert_res = SSL_get_verify_result(ssl.get());
+				return (cert_res == X509_V_OK);
+			}
 		case Mode::accept: {
 			{
 				std::lock_guard _(ssl_lock);

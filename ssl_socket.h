@@ -58,7 +58,8 @@ protected:
 	enum class State {
 		retry,
 		eof,
-		timeout
+		timeout,
+		error
 	};
 
 	enum class ConnState {
@@ -82,6 +83,7 @@ protected:
 	void handleStateAsync(int r, int tm, Fn &&fn);
 
 	void shutdownAsync();
+	bool afterConnect();
 };
 
 }
