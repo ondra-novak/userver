@@ -604,7 +604,6 @@ inline OpenAPIServer::QueryParserWithVars::QueryParserWithVars(const VarList &vl
 	std::vector<std::pair<std::pair<int, int>,std::pair<int, int> > > varindex;
 	for (const auto &v: vlist) {
 		int l1 = buffer.length();
-		buffer.push_back('#');
 		buffer.append(v.first);
 		int l2 = buffer.length();
 		buffer.push_back(0);
