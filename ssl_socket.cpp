@@ -376,11 +376,15 @@ void SSLSocket::shutdownAsync() {
 		switch (st) {
 			case SSL_ERROR_WANT_WRITE: op = AsyncResource::write;break;
 			case SSL_ERROR_WANT_READ: op = AsyncResource::read;break;
-			default: return;
+			default:
+				connState = ConnState::closed;
+				return;
 		}
 		getCurrentAsyncProvider().runAsync(AsyncResource(op, h),[sock = SSLSocket(std::move(*this))](bool succ) mutable {
 			if (succ) sock.shutdownAsync();
 		}, std::chrono::system_clock::now()+std::chrono::seconds(30));
+	} else {
+		connState = ConnState::closed;
 	}
 }
 
