@@ -362,6 +362,14 @@ void OpenAPIServer::serializeSchema(_undefined::Obj &&obj, const Sch &param) {
 				serializeSchema(std::move(n), c);
 			}
 		}
+	} else if (type == "enum") {
+		obj("type","string");
+		{
+			Arr arr (obj.array("enum"));
+			for (const auto c: param.properties) {
+				arr << c.name;
+			}
+		}
 	} else if (type == "array") {
 		obj("type","array");
 		Obj items(obj.object("items"));
