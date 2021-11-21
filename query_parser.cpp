@@ -203,7 +203,6 @@ bool PathAndQueryParser::parsePath(const std::string_view &pattern) {
 		char c= pattern[prn];
 		if (c == '{') {
 			fldname.clear();
-			fldname.push_back('~');
 			prn++;
 			while (prn < prn_end && pattern[prn] != '}') {
 				fldname.push_back(pattern[prn]);

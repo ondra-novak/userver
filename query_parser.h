@@ -54,13 +54,11 @@ protected:
 };
 
 ///Parses query and items in the path
-/** Items in the path are prefixed by ~ (tilda) character.
- *
- * The pattern doesn't contain this character
+/**
  *
  *  /path/{item1}/{item2}
  *
- *  stores as ~item1 and ~item2
+ *  stores as item1 and item2
  */
 class PathAndQueryParser:public QueryParser {
 public:
