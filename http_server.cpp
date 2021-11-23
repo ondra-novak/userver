@@ -245,8 +245,8 @@ std::string_view HttpServerRequest::getMethod() const {
 	return method;
 }
 
-std::string_view HttpServerRequest::getURI() const {
-	return uri;
+std::string_view HttpServerRequest::getPath() const {
+	return path;
 }
 
 std::string_view HttpServerRequest::getHTTPVer() const {
@@ -271,7 +271,7 @@ bool HttpServerRequest::parseFirstLine(std::string_view &v) {
 	for (std::size_t i = 0; i < x; i++) firstLine[i] = std::toupper(firstLine[i]);
 	for (std::size_t i = y, cnt = firstLine.size(); i < cnt; i++) firstLine[i] = std::toupper(firstLine[i]);
 	method = std::string_view(firstLine.data(), x);
-	uri = std::string_view(firstLine.data()+x+1, y - x - 1);
+	path = std::string_view(firstLine.data()+x+1, y - x - 1);
 	httpver = std::string_view(firstLine.data()+y+1, firstLine.size() - y - 1);
 	return true;
 }
@@ -702,7 +702,7 @@ void HttpServerRequest::setContentTypeFromExt(std::string_view ext) {
 bool HttpServerRequest::sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, const std::string_view &pathname) {
 	using namespace std::filesystem;
 	try {
-	path p(pathname);
+	std::filesystem::path p(pathname);
 
 	if (!reqptr->has_last_modified) {
 		auto wrm = last_write_time(p);
@@ -840,7 +840,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 
 	if (!req->isValid()) return true;
 	std::string host (req->getHost());
-	std::string vpathbuff ( req->getURI());
+	std::string vpathbuff ( req->getPath());
 	std::string_view vpath(vpathbuff);
 	std::string_view prefix;
 	std::shared_lock _(mapping->shrmux);
@@ -1096,7 +1096,7 @@ void HttpServer::buildLogMsg(std::ostream &stream, const HttpServerRequest &req)
 	stream << req.getMethod() << ' ';
 	stream.width(0);
 	stream << req.getHost();
-	stream << req.getURI();
+	stream << req.getPath();
 	stream << std::endl;
 }
 
@@ -1133,19 +1133,19 @@ Stream& HttpServerRequest::getStream() {
 }
 
 bool HttpServerRequest::directoryRedir() {
-	auto astq = uri.find('?');
+	auto astq = path.find('?');
 	std::string_view query;
 	std::string_view path;
-	if (astq != uri.npos) {
-		path = uri.substr(0,astq);
-		query = uri.substr(astq);
+	if (astq != path.npos) {
+		path = path.substr(0,astq);
+		query = path.substr(astq);
 	} else {
-		path = uri;
+		path = path;
 	}
 	if (path.empty() || path.back() != '/') {
 		std::string newuri;
 		newuri.reserve(path.length()+query.length()+1);
-		newuri.append(uri);
+		newuri.append(path);
 		newuri.push_back('/');
 		newuri.append(query);
 		setStatus(301);
@@ -1214,5 +1214,58 @@ bool HttpServerRequest::allowMethods(std::initializer_list<std::string_view> met
 }
 
 HttpServerMapper::~HttpServerMapper() {}
+
+bool HttpServerRequest::isSecure() const {
+	{
+		auto xfp = get("X-Forwarded-Proto");
+		if (xfp.defined) return HeaderValue::iequal(xfp, "https");
+	}
+	{
+		auto feh = get("Front-End-Https");
+		if (feh.defined) return HeaderValue::iequal(feh , "on");
+	}
+	{
+		auto xfp2 = get("X-Forwarded-Protocol");
+		if (xfp2.defined) return HeaderValue::iequal(xfp2 , "https");
+	}
+	{
+		auto xfs = get("X-Forwarded-Ssl");
+		if (xfs.defined) return HeaderValue::iequal(xfs ,"on");
+	}
+	{
+		auto xus = get("X-Url-Scheme");
+		if (xus.defined) return HeaderValue::iequal(xus, "https");
+	}
+	{
+		auto fw = get("Forwarded");
+		if (fw.defined) {
+			std::string_view c = fw;
+			while (c.empty()) {
+				auto itm = splitAt(";", c);
+				trim(c);
+				auto key = splitAt("=", itm);
+				trim(itm);
+				trim(key);
+				if (HeaderValue::iequal(key, "proto")) {
+					return HeaderValue::iequal(itm, "https");
+				}
+			}
+		}
+	}
+	return false;
+
+}
+
+std::string HttpServerRequest::getURL() const {
+	std::string ret;
+	auto host = getHost();
+	auto path = getPath();
+	bool sec = isSecure();
+	ret.reserve(host.length()+path.length()+sec?7:8);
+	if (sec) ret.append("https://"); else ret.append("http://");
+	ret.append(host);
+	ret.append(path);
+	return ret;
+}
 
 }

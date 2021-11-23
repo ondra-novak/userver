@@ -86,11 +86,34 @@ public:
 
 
 	HeaderValue get(const std::string_view &item) const;
+	///Retrieves method GET, POST, PUT, etc
 	std::string_view getMethod() const;
-	std::string_view getURI()  const;
+	///Retrieves whole path - including query string.
+	std::string_view getPath()  const;
+	///Retrieves http version (HTTP/1.0 or HTTP/1.1)
 	std::string_view getHTTPVer()  const;
+	///Retrieves host header
 	std::string_view getHost()  const;
+	///Returns true, if request is over https
+	/**
+	 * @note This is observed using headers, Forwarded, X-Forwarded-Proto, etc because server can't handle secure connections
+	 */
+	bool isSecure() const;
 
+	///Generates URL of the request
+	/**
+	 * Function uses known informations from the headers to generate whole URL
+	 *
+	 * To achieve correct function, you have keep folowing rules while mapping service to the webserver
+	 *
+	 * - disable rewrite - path must be passed as it was retrieved. Use benefit of host-mapping feature to remap
+	 *   service to different path
+	 * - pass Host - do not change original host, this also helps to correct funtion of host-mapping (do not strip port)
+	 * - pass 'X-Forwarded-Proto: https' if original request is served by https connection
+	 *
+	 * @return Function returns http(s)://<host>/<path>
+	 */
+	std::string getURL() const;
 
 	void set(const std::string_view &key, const std::string_view &value);
 	void set(const std::string_view &key, std::size_t number);
@@ -230,7 +253,7 @@ protected:
 	std::vector<char> logBuffer;
 	std::vector<std::pair<std::string_view, std::string_view> > inHeader;
 	std::string statusMessage;
-	std::string_view method, uri, httpver, host;
+	std::string_view method, path, httpver, host;
 
 	bool parseFirstLine(std::string_view &v);
 	bool parseHeaders(std::string_view &v);
