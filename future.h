@@ -4,15 +4,33 @@
 
 namespace userver {
 
+///Informs observer about type of execution
 enum class CallType {
+	///Callback is executed in different context (asynchronously)
 	async,
+	///Callback is executed in current context (synchronously)
 	sync
 };
 
+///Future variable
+/**
+ * Future variable has no value until it is set. Any thread can observe the future and get notified once the future
+ * value is set. Future can be set only once, and already set value can't be changed.
+ *
+ * Future's value can consists from multiple items of different type like a tuple. All items must be set at
+ * once. The observing thread then receive all items through the callback
+ *
+ * Future's instance is unmovable object. If you need to share or move the Future instance, you need to create the
+ * instance through make_unique or make_shared (the apropriate smart pointer is the result)
+ *
+ * Future's instance not fully MT-safe. Please check note on each function whether need to be synchronized.
+ *
+ */
 template<typename ... Types>
 class Future {
 public:
 
+	///Definition of an type, which holds the value
 	using Tuple = std::tuple<Types...>;
 
 	///Inicialize empty future
@@ -28,7 +46,7 @@ public:
 	void operator=(const Future &) = delete;
 	void operator=(Future &&) = delete;
 
-	///Define action when future is resolved
+	///Register observer callback
 	/**
 	 * @param callback function. The callback function can have zero arguments or exact count of arguments specified
 	 * by Future type. There can be one extra argument at first position, the argument of type CallType
@@ -39,11 +57,6 @@ public:
 	 * f>>[=](const Types &... args);
 	 * f>>[=](CallType ct, const Types &... args);
 	 * @endcode
-	 *
-	 * @note CallType can be specified only as first argument. The CallType is set to CallType::async,
-	 * when callback is called asynchronously upon future resolution (in the context of function, which sets
-	 * the value of the future). The value CallType::sync specifies, that the future has been already resolved and
-	 * execution is performed in context of the current thread (recursively)
 	 *
 	 * @note MT-Safe - multiple threads can call this operator without additional synchronozation
 	 */
@@ -70,12 +83,17 @@ public:
 	/**
 	 * @retval true future has already value
 	 * @retval false future was not resolved
+	 *
+	 * @note MT-Safe
 	 */
-	bool isResolved() const;
+	bool has_value() const;
 	///Returns status of future
 	/**
 	 * @retval true future was not resolved
 	 * @retval false future has already value
+	 *
+	 * @note MT-Safe
+	 *
 	 */
 	bool operator!() const;
 
@@ -84,6 +102,9 @@ public:
 	 * Function is synchronous. If the future is not ready yet, function blocks execution
 	 *
 	 * Function is optimized to be called on already resolved future.
+	 *
+	 *  @note MT-Safe
+	 *
 	 */
 	const Tuple &get() const;
 
@@ -115,13 +136,13 @@ public:
 	/**
 	 * Shared future can be shared between threads. Last reference destroyes the future
 	 */
-	std::shared_ptr<Future<Types...> > makeShared() {return std::make_shared<Future<Types...> >();}
+	std::shared_ptr<Future<Types...> > make_shared() {return std::make_shared<Future<Types...> >();}
 
 	///Creates unique future
 	/**
 	 * Unique future can be moved through contextes (because stack base Future cannot),
 	 */
-	std::unique_ptr<Future<Types...> > makeUnique() {return std::make_unique<Future<Types...> >();}
+	std::unique_ptr<Future<Types...> > make_unique() {return std::make_unique<Future<Types...> >();}
 
 protected:
 
@@ -144,8 +165,8 @@ protected:
 	template<typename Fn>
 	static inline auto cbcall(Fn &&fn, CallType ct, const Tuple &t)
 						-> decltype( std::declval<Fn>() (CallType::async, std::declval<Types>()...)) {
-		return std::apply([fn = std::forward<Fn>(fn), ct](const Types & ... args){
-			fn(ct,args...);
+		return std::apply([&](const Types & ... args){
+			return fn(ct,args...);
 		},t);
 	}
 
@@ -242,7 +263,7 @@ inline void Future<Types...>::set(Types && ... val) {
 }
 
 template<typename ... Types>
-inline bool Future<Types ...>::isResolved() const {
+inline bool Future<Types ...>::has_value() const {
 	return resolved.load();
 }
 
@@ -287,7 +308,7 @@ template<typename ... Types>
 void Future<Types...>::flushCallbacks(AbstractAction *me) const {
 	AbstractAction *z = nullptr;
 	const Tuple &val = value;
-	callbacks.exchange(z);
+	z = callbacks.exchange(z);
 	while (z) {
 		auto c = z;
 		z = z->next;
