@@ -214,7 +214,7 @@ inline Future<Types...>::Future()
 template<typename ...Types>
 inline Future<Types...>::~Future() {
 	AbstractAction *z = nullptr;
-	callbacks.exchange(z);
+	z = callbacks.exchange(z);
 	while (z) {
 		AbstractAction *c = z;
 		z = z->next;
