@@ -1016,7 +1016,7 @@ void HttpServer::log(const HttpServerRequest &, const std::string_view &msg) {
 	buildLogMsg(std::cout, msg);
 }
 
-void HttpServer::log(const HttpServerRequest &r, LogLevel lev, const std::string_view &msg) {
+void HttpServer::log(const HttpServerRequest &r, LogLevel, const std::string_view &msg) {
 	std::lock_guard _(lock);
 	log(r,msg);
 }

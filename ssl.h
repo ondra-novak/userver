@@ -46,7 +46,16 @@ struct SSLConfig {
 PSSLClientFactory createSSLClient();
 PSSLClientFactory createSSLClient(const SSLConfig &cfg);
 
+static inline auto sslConnectFn(PSSLClientFactory &&ssl) {
+	return[ssl = std::move(ssl)](const userver::NetAddr &addr, const std::string_view &host){
+		userver::Socket sock = userver::Socket::connect(addr);
+		return ssl->makeSecure(sock, std::string(host));
+	};
+}
 
+static inline auto sslConnectFn() {
+	return sslConnectFn(createSSLClient());
+}
 
 }
 

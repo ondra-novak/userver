@@ -181,7 +181,7 @@ protected:
 
 	struct PathReg {
 		std::string path;
-		std::optional<OperationStruct> GET,PUT,POST,DELETE;
+		std::optional<OperationStruct> GET={},PUT={},POST={},DELETE={};
 	};
 
 	InfoObject info;
