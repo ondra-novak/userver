@@ -447,6 +447,40 @@ std::unique_ptr<HttpClientRequest> HttpClient::sendRequest(const Method &method,
 	return req;
 }
 
+void HttpClient::sendRequest(const Method &method, const URL &url, HeaderList headers, Callback &&cb) {
+	std::vector<HeaderPair> hrds(headers.begin(), headers.end());
+	open(method, url, [cb = std::move(cb), hdrs = std::move(hrds)](
+			std::unique_ptr<HttpClientRequest> &&req
+	)mutable{
+		if (req == nullptr) cb(nullptr);
+		else {
+			for (const auto &hp: hdrs) req->addHeader(hp.first, hp.second);
+			auto reqptr = req.get();
+			reqptr->sendAsync([req = std::move(req), cb = std::move(cb)](int status) mutable {
+				if (status < 0) cb(nullptr);
+				else cb(std::move(req));
+			});
+		}
+	});
+}
+
+void HttpClient::sendRequest(const Method &method, const URL &url, HeaderList headers, DataStream &&data, Callback &&cb) {
+	std::vector<HeaderPair> hrds(headers.begin(), headers.end());
+	open(method, url, [cb = std::move(cb), data= std::move(data), hdrs = std::move(hrds)](
+			std::unique_ptr<HttpClientRequest> &&req
+	)mutable{
+		if (req == nullptr) cb(nullptr);
+		else {
+			for (const auto &hp: hdrs) req->addHeader(hp.first, hp.second);
+			auto reqptr = req.get();
+			reqptr->sendAsync(std::move(data), [req = std::move(req), cb = std::move(cb)](int status) mutable {
+				if (status < 0) cb(nullptr);
+				else cb(std::move(req));
+			});
+		}
+	});
+}
+
 
 
 HttpClient::HeaderList::HeaderList(const std::initializer_list<HeaderPair> &lst)
@@ -495,6 +529,69 @@ protected:
 Stream HttpClientRequest::getResponseBody(std::unique_ptr<HttpClientRequest> &&req) {
 	Stream &s = req->getResponse();
 	return Stream(new StreamWrap(s,std::move(req)));
+}
+
+const HttpClientRequest::HeaderMap& HttpClientRequest::getHeaders() {
+	return responseHeaders;
+}
+
+
+void HttpClient::GET(const URL &url, HeaderList headers, Callback &&cb) {
+	sendRequest("GET", url, headers, std::move(cb));
+}
+
+void HttpClient::POST(const URL &url, HeaderList headers, const Data &data, Callback &&cb) {
+	sendRequest("POST", url, headers, data, std::move(cb));
+}
+
+void HttpClient::PUT(const URL &url, HeaderList &headers, const Data &data, Callback &&cb) {
+	sendRequest("PUT", url, headers, data, std::move(cb));
+}
+
+void HttpClient::DELETE(const URL &url, HeaderList headers, const Data &data,Callback &&cb) {
+	sendRequest("DELETE", url, headers, data, std::move(cb));
+}
+
+void HttpClient::DELETE(const URL &url, HeaderList headers, Callback &&cb) {
+	sendRequest("DELETE", url, headers, std::move(cb));
+}
+
+
+class StringSource {
+public:
+	StringSource (const std::string_view s):s(s),sent(false) {}
+	std::string_view operator()() const {
+		if (sent) return std::string_view();
+		else {
+			sent = true;
+			return s;
+		}
+	}
+	auto size() const {return s.size();}
+
+protected:
+	std::string s;
+	mutable bool sent;
+};
+
+void HttpClient::sendRequest(const Method &method, const URL &url,
+		HeaderList headers, const Data &data, Callback &&cb) {
+	std::vector<HeaderPair> hrds(headers.begin(), headers.end());
+	StringSource sdata(data);
+	open(method, url, [cb = std::move(cb), sdata= std::move(sdata), hdrs = std::move(hrds)](
+			std::unique_ptr<HttpClientRequest> &&req
+	)mutable{
+		if (req == nullptr) cb(nullptr);
+		else {
+			for (const auto &hp: hdrs) req->addHeader(hp.first, hp.second);
+			req->setBodyLength(sdata.size());
+			auto reqptr = req.get();
+			reqptr->sendAsync(sdata, [req = std::move(req), cb = std::move(cb)](int status) mutable {
+				if (status < 0) cb(nullptr);
+				else cb(std::move(req));
+			});
+		}
+	});
 }
 
 }

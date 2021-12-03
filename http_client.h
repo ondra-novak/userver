@@ -89,7 +89,7 @@ public:
 	Stream &beginBody();
 	///Send the prepared request
 	/** Sends prepared request. It finalizes body, if it was started by beginBody(). Note that
-	 * stream for the bode becomes unavailable
+	 * stream for the body becomes unavailable
 	 *
 	 * the function waits for response
 	 *
@@ -98,6 +98,15 @@ public:
 	 */
 	int send();
 
+	///Send request with body,
+	/**
+	 * Function calls beginBody(), then writes body to the stream and finally calls send()
+	 * to finalize request. Body is presented as function, which can generate object which can
+	 * be converted to std::string_view. These objects are pushed to the stream synchronously
+	 */
+	template<typename Fn, typename = decltype(std::string_view(std::declval<Fn>()))>
+	int send(Fn &&body);
+
 	///Sends request asynchronously
 	/**
 	 * @param cb a callback function is called with a status code.
@@ -105,6 +114,13 @@ public:
 	 * @see send
 	 */
 	void sendAsync(CallbackT<void(int)> &&cb);
+
+	///Sends request with body asynchronously
+	/**
+
+	 */
+	template<typename Fn, typename = decltype(std::string_view(std::declval<Fn>()()))>
+	void sendAsync(Fn &&body, CallbackT<void(int)> &&cb);
 
 	///Requests 100-continue
 	/** This allows to validate request by the server before the body is actually send. The
@@ -159,7 +175,7 @@ public:
 	iterator begin() const;
 	iterator end() const;
 	std::pair<iterator, iterator> find(const std::string_view &key) const;
-	HeaderMap &getHeaders();
+	const HeaderMap &getHeaders();
 
 
 	///Returns host of current opened request
@@ -190,6 +206,10 @@ protected:
 	void prepareUserStream();
 	bool parseResponse();
 	void finish_headers_excpect_100();
+
+	template<typename Fn>
+	void sendAsyncCont(Fn &&body, CallbackT<void(int)> &&cb);
+
 };
 
 
@@ -212,6 +232,7 @@ public:
 	using Data = std::string_view;
 	using Method = std::string_view;
 	using Callback = CallbackT<void(std::unique_ptr<HttpClientRequest> &&)>;
+	using DataStream = CallbackT<std::string_view(void)>;
 
 
 	HttpClient(HttpClientCfg &&cfg);
@@ -259,6 +280,12 @@ public:
 	std::unique_ptr<HttpClientRequest> DELETE(const URL &url, HeaderList headers, const Data &data);
 	std::unique_ptr<HttpClientRequest> DELETE(const URL &url, HeaderList headers);
 
+	void GET(const URL &url, HeaderList headers, Callback &&cb);
+	void POST(const URL &url, HeaderList headers, const Data &data, Callback &&cb);
+	void PUT(const URL &url, HeaderList &headers, const Data &data, Callback &&cb);
+	void DELETE(const URL &url, HeaderList headers, const Data &data, Callback &&cb);
+	void DELETE(const URL &url, HeaderList headers, Callback &&cb);
+
 
 
 protected:
@@ -283,11 +310,48 @@ protected:
 
 	std::unique_ptr<HttpClientRequest> sendRequest(const Method &method, const URL &url, HeaderList headers);
 	std::unique_ptr<HttpClientRequest> sendRequest(const Method &method, const URL &url, HeaderList headers, const Data &data);
+	void sendRequest(const Method &method, const URL &url, HeaderList headers, Callback &&cb);
+	void sendRequest(const Method &method, const URL &url, HeaderList headers, DataStream &&data, Callback &&cb);
+	void sendRequest(const Method &method, const URL &url, HeaderList headers, const Data &data, Callback &&cb);
 
 
 };
+
+template<typename Fn, typename>
+inline int HttpClientRequest::send(Fn &&body) {
+	Stream &s=beginBody();
+	std::string_view data = body();
+	while (!data.empty()) {
+		s.write(data);
+		 data = body();
+	}
+	return send();
+}
+
+template<typename Fn, typename>
+inline void HttpClientRequest::sendAsync(Fn &&body, CallbackT<void(int)> &&cb) {
+	beginBody();
+	sendAsyncCont(std::forward<Fn>(body),std::move(cb));
+}
+
+template<typename Fn>
+inline void userver::HttpClientRequest::sendAsyncCont(Fn &&body, CallbackT<void(int)> &&cb) {
+	std::string_view data = body();
+	while (!data.empty()) {
+		if (s.writeNB(data)) {
+			s.flushAsync([this, body = std::forward<Fn>(body), cb = std::move(cb)](bool ok) mutable {
+				if (!ok) cb(-1);
+				sendAsyncCont(std::forward<Fn>(body), std::move(cb));
+			});
+		} else {
+			data = body();
+		}
+	}
+	sendAsync(std::move(cb));
+}
 
 }
 
 
 #endif /* SRC_USERVER_HTTP_CLIENT_H_ */
+

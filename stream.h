@@ -137,6 +137,22 @@ public:
 		ptr->readAsync(std::move(fn));
 	}
 
+	///Asynchronously read whole stream to a string buffer
+	/**
+	 * Function receives callback function which is called with whole string buffer.
+	 *
+	 * @param buffer Buffer instance. The buffer must implement append() function
+	 * @param maxSize specify size limit. Use 0 to unlimited read
+	 * @param fn function called with result.
+	 *
+	 * @note reading stops when specified count of bytes is reached, or when end of stream is reached.
+	 * In case of timeout, reading also stops and timeouted() is signaled
+	 *
+	 * @note function transfer ownership to the callback
+	 */
+	template<typename Buffer, typename Fn, typename = decltype(std::declval<Fn>()(std::declval<Stream &>(), std::declval<std::string>()))>
+	void readToStringAsync(Buffer &&buffer, std::size_t maxSize, Fn &&fn);
+
 	///Puts back a buffer
 	/**
 	 * Puts a buffer back to the stream, so it will be available by next read
@@ -726,5 +742,25 @@ inline std::size_t LimitedStream<SS>::getOutputBufferSize() const {
 	return source.getOutputBufferSize();
 }
 
+
+template<typename Buffer, typename Fn, typename >
+inline void Stream::readToStringAsync(Buffer &&buffer, std::size_t maxSize, Fn &&fn) {
+	readAsync([this, maxSize, buffer = std::forward<Buffer>(buffer), fn = std::forward<Fn>(fn)](Stream &s, std::string_view data)mutable {
+		if (data.empty()) {
+			fn(s,buffer);
+		}
+		else if (maxSize && data.length() >= maxSize) {
+			putBack(data.substr(maxSize));
+			buffer.append(data.substr(0,maxSize));
+			fn(s,buffer);
+		} else {
+			buffer.append(data);
+			maxSize -= data.length();
+			s.readToStringAsync(std::forward<Buffer>(buffer), maxSize, std::forward<Fn>(fn));
+		}
+	});
 }
+
+}
+
 #endif /* SRC_MAIN_STREAM_H_ */
