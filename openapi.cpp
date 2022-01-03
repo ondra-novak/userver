@@ -578,10 +578,10 @@ bool OpenAPIServer::execHandler(userver::PHttpServerRequest &req, const std::str
 	if (splt == vpath.npos) {
 		path = vpath;
 	} else {
-		path = vpath.substr(splt);
+		path = vpath.substr(0,splt);
 		query = vpath.substr(splt+1);
 	}
-	return root.findPath(vpath, vars, [&](const PathTreeItem &itm, const VarList &vars) {
+	return root.findPath(path, vars, [&](const PathTreeItem &itm, const VarList &vars) {
 
 		auto m = req->getMethod();
 		auto iter = std::find(std::begin(methodList), std::end(methodList), m);
