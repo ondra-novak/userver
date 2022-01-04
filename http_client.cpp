@@ -130,7 +130,7 @@ void HttpClientRequest::prepareUserStream() {
 			std::size_t len = ctl.getUInt();
 			userStream.emplace(std::make_unique<LimitedStream<Stream &> >(s, len, 0));
 		} else {
-			HeaderValue te = get("Tranfer-Encoding");
+			HeaderValue te = get("Transfer-Encoding");
 			if (HeaderValue::iequal(te, "chunked")) {
 				userStream.emplace(std::make_unique<ChunkedStream<Stream &> >(s,false, true));
 			} else {
