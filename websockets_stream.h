@@ -93,7 +93,7 @@ public:
 				}
 			}
 		};
-		s.readAsync([state = this->state](std::string_view data){
+		s.read() >> [state = this->state](std::string_view data){
 			CallbackT<void(const std::string_view &data)> readcb;
 			{
 				std::lock_guard _(state->stlock);
@@ -102,7 +102,7 @@ public:
 			if (readcb != nullptr) {
 				readcb(data);
 			}
-		});
+		};
 	}
 
 	void discardFrame() {parser.discardFrame();}
@@ -185,12 +185,12 @@ protected:
 				write(tmp);
 			}
 		};
-		s.flushAsync([state = this->state](bool ok){
+		s.flush() >> [state = this->state](bool ok){
 			std::lock_guard _(state->stlock);
 			CallbackT<void(bool)> flushcb;
 			flushcb=std::move(state->flushcb);
 			if (flushcb != nullptr) flushcb(ok);
-		});
+		};
 	}
 
 

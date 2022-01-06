@@ -154,8 +154,8 @@ void storeException();
 /** rethrows any stored exception */
 void rethrowStoredException();
 
-}
 
+}
 #endif /* SRC_MINISERVER_ASYNC_PROVIDER_H_ */
 
 

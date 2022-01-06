@@ -197,7 +197,7 @@ void HttpServerRequest::setKeepAliveCallback(KeepAliveCallback &&kc) {
 
 bool HttpServerRequest::readHeader() {
 	int m = 0;
-	auto buf = stream.read();
+	std::string_view buf = stream.read();
 	while (!buf.empty()) {
 		if (readHeader(buf, m)) {
 			stream.putBack(buf);
@@ -209,7 +209,7 @@ bool HttpServerRequest::readHeader() {
 
 template<typename Fn>
 void HttpServerRequest::readHeaderAsync(int m, Fn &&fn) {
-	stream.readAsync([this, m, fn = std::move(fn)](std::string_view data) mutable {
+	stream.read()>>[this, m, fn = std::move(fn)](std::string_view data) mutable {
 		if (data.empty()) {
 			fn(false);
 			return;
@@ -221,7 +221,7 @@ void HttpServerRequest::readHeaderAsync(int m, Fn &&fn) {
 			fn(true);
 		}
 		else readHeaderAsync(m, std::move(fn));
-	});
+	};
 }
 
 
@@ -339,7 +339,7 @@ HttpServerRequest::~HttpServerRequest() {
 			}
 			stream.flush();
 			if (logger) logger->log(ReqEvent::done,*this);
-			if (enableKeepAlive && hasBody && klcb != nullptr) klcb(stream, *this);
+			if (enableKeepAlive && !hasBody && klcb != nullptr) klcb(stream, *this);
 		}
 	} catch (...) {
 
@@ -770,11 +770,11 @@ void HttpServerRequest::sendFileAsync(std::unique_ptr<HttpServerRequest> &reqptr
 		auto cnt = in->gcount();
 		if (cnt) {
 			if (out.writeNB(std::string_view(buff, static_cast<std::size_t>(cnt)))) {
-				out.flushAsync([reqptr = std::move(reqptr),  in = std::move(in)](Stream &out, bool ok) mutable {
+				out.flush() >> [reqptr = std::move(reqptr),  in = std::move(in)](Stream &out, bool ok) mutable {
 					if (ok) {
 						sendFileAsync(reqptr, in, out);
 					}
-				});
+				};
 				return;
 			}
 		} else {
@@ -782,9 +782,9 @@ void HttpServerRequest::sendFileAsync(std::unique_ptr<HttpServerRequest> &reqptr
 		}
 	}
 	//empty flush async, just held request until flushed
-	out.flushAsync([reqptr = std::move(reqptr)](Stream &, bool ) {
+	out.flush() >>[reqptr = std::move(reqptr)]() {
 		// empty
-	});
+	};
 }
 
 void HttpServerMapper::addPath(const std::string_view &path, Handler &&handler) {
@@ -1036,7 +1036,7 @@ void HttpServer::unhandled() {
 
 void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
 	req->setLogger(logger.get());
-	s.readAsync([this, req = std::move(req)](Stream &s, const std::string_view &data) mutable {
+	s.read() >> [this, req = std::move(req)](Stream &s, const std::string_view &data) mutable {
 		if (!data.empty()) {
 			s.putBack(data);
 			HttpServerRequest *preq = req.get();
@@ -1054,7 +1054,7 @@ void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
 				}
 			});
 		}
-	});
+	};
 }
 
 void HttpServerRequest::log2(LogLevel lev) {

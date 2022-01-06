@@ -43,11 +43,16 @@ void wsConnectAsync(HttpClient &httpclient, const HttpClient::URL &url, Fn &&cal
 			req->addHeader("Sec-WebSocket-Version","13");
 			req->addHeader("Sec-WebSocket-Key","dGhlIHNhbXBsZSBub25jZQ==");
 			auto r = req.get();
-			r->sendAsync([callback = std::forward<Fn>(callback), req = std::move(req)](int status) mutable {
-				if (status != 101) callback(status, nullptr);
-				if (req->get("Upgrade") != "websocket") callback(-1,nullptr);
-				callback(status, std::make_unique<WSStream>(std::move(req->getStream()), true));
-			});
+			r->send() >> [callback = std::forward<Fn>(callback), req = std::move(req)](int status) mutable {
+				if (status != 101) {
+					callback(status, nullptr);
+				} else if (req->get("Upgrade") != "websocket") {
+					callback(-1,nullptr);
+				} else {
+					callback(status, std::make_unique<WSStream>(std::move(req->getStream()), true));
+				}
+
+			};
 		}
 	});
 }

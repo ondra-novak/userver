@@ -84,6 +84,75 @@ public:
 		return Stream(ptr, false);
 	}
 
+	///Read helper - please look at description of read()
+	/**
+	 * Object is result of operation read(). It is useful as immediately object, not for storing.
+	 * Outside it is acting as reference to the Stream (Stream &).
+	 *
+	 * You can use object to obtain data synchronously
+	 *
+	 * @code
+	 * std::string_view data = stream.read();
+	 * @endcode
+	 *
+	 * You can use object as source of characters, because object acts as function returning single byte
+	 *
+	 * @code
+	 * parse(stream.read()); //parse from input - read charactes one by one
+	 * @endcode
+	 *
+	 * You can use object to initiate asynchronous reading
+	 *
+	 * @code
+	 * stream.read() >> [=](std::string_view data) {....};
+	 * @endcode
+	 *
+	 * The ownership of the stream can be also transfered to the callback
+	 *
+	 * @code
+	 * stream.read() >> [=](Stream &stream, std::string_view data) {....};
+	 * @endcode
+	 *
+	 */
+	class ReadHelper {
+	public:
+		ReadHelper(Stream &owner):owner(owner) {}
+		ReadHelper(const ReadHelper &) = delete;
+		//
+		operator std::string_view() {return owner.ptr->read();}
+		int operator()() {
+			auto buff = owner.ptr->read();
+			if (buff.empty()) return -1;
+			int res = buff[0];
+			owner.ptr->putBack(buff.substr(1));
+			return res;
+		}
+		template<typename Fn> void operator>>(Fn &&fn) {
+			readAsync(std::forward<Fn>(fn));
+		}
+
+	protected:
+		Stream &owner;
+
+		template<typename Fn> auto readAsync(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<std::string_view>())) {
+			owner.ptr->readAsync(std::forward<Fn>(fn));
+		}
+		template<typename Fn> auto readAsync(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<Stream &>(), std::declval<std::string_view>())) {
+			auto ptr = owner.ptr;
+			ptr->readAsync([fn = std::forward<Fn>(fn),stream = std::move(owner)](const std::string_view &data) mutable {
+				fn(stream, data);
+			});
+		}
+		template<typename Fn> auto readAsync(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<Stream>(), std::declval<std::string_view>())) {
+			auto ptr = owner.ptr;
+			ptr->readAsync([fn = std::forward<Fn>(fn),stream = std::move(owner)](const std::string_view &data) mutable {
+				fn(stream, data);
+			});
+		}
+	};
+
+	ReadHelper read() {return ReadHelper(*this);}
+
 	///Synchronous read
 	/** Reads an undetermined count of bytes from the input stream
 	 * Function blocks, if there no bytes to read. It always returns at least one
@@ -94,48 +163,8 @@ public:
 	 * has been closed or timeouted. To determine timeout, call timeouted(). Timeouted
 	 * connection is considered dead and closed.
 	 */
-	std::string_view read() {return ptr->read();}
-	///Asynchronous read
-	/**
-	 * Read an undetermined count of bytes from the input stream asynchrously. Function
-	 * returns immediately, while completion of the read is indicated by calling the
-	 * callback function. The callback function receives the reference to Stream object and the
-	 * string_view to read data. If the string_view is empty, then end of stream or timeout
-	 * has happened.
-	 *
-	 * @note Ownership! This object is loosing ownership of the stream, the ownership is
-	 * transfered to the callback function, so you need to pick the ownership of the
-	 * stream from the first argument of the callback function.
-	 *
-	 * @note Only one pending asynchronous operation at time is allowed. In case
-	 * of multiple asynchronous operations state of the stream is undefined
-	 *
-	 * @param fn a callback function which receives transfered ownership of the stream
-	 * and received data
-	 */
-	template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<Stream &>(), std::string_view()))>
-	void readAsync(Fn &&fn) {
-		ptr->readAsync([fn = std::move(fn), s = std::move(*this)](const std::string_view &data) mutable {
-			fn(s,data);
-		});
-	}
-	///Asynchronous read
-	/**
-	 * Read an undetermined count of bytes from the input stream asynchrously. Function
-	 * returns immediately, while completion of the read is indicated by calling the
-	 * callback function. The callback function receives a string_view to read data.
-	 * If the string_view is empty, then end of stream or timeouth has happened.
-	 *
-	 * @note Ownership! This object retain ownership of the stream
-	 *
-	 * @note Only one pending asynchronous operation at time is allowed. In case
-	 * of multiple asynchronous operations state of the stream is undefined
-	 *
-	 * @param fn a callback function which receives a received data
-	 */
-	void readAsync(CallbackT<void(const std::string_view &data)> &&fn) {
-		ptr->readAsync(std::move(fn));
-	}
+	std::string_view readSync() {return ptr->read();}
+
 
 	///Asynchronously read whole stream to a string buffer
 	/**
@@ -218,11 +247,84 @@ public:
 	 * any blocking operation (or operation, which would block in case on asynchronous read)
 	 */
 	void closeInput() {return ptr->closeInput();}
+
+	class FlushHelper {
+	public:
+		FlushHelper(Stream &owner):owner(owner),done(false) {}
+		~FlushHelper() noexcept(false) {
+			if (!done) owner.ptr->flush();
+		}
+		template<typename Fn> void operator >> (Fn &&fn) {
+			done = true;
+			flushAsync(std::forward<Fn>(fn));
+		}
+	protected:
+		Stream &owner;
+		bool done;
+
+		template<typename Fn> auto flushAsync(Fn &&fn) -> decltype(std::declval<Fn>()()) {
+			owner.ptr->flushAsync([fn = std::forward<Fn>(fn)](bool ok) {
+				fn();
+			});
+		}
+		template<typename Fn> auto flushAsync(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<bool>())) {
+			owner.ptr->flushAsync(std::forward<Fn>(fn));
+		}
+		template<typename Fn> auto flushAsync(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<Stream>())) {
+			auto ptr = owner.ptr;
+			ptr->flushAsync([owner = std::move(owner), fn = std::forward<Fn>(fn)](bool ok) mutable {
+				fn(std::move(owner));
+			});
+		}
+		template<typename Fn> auto flushAsync(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<Stream &>())) {
+			auto ptr = owner.ptr;
+			ptr->flushAsync([owner = std::move(owner), fn = std::forward<Fn>(fn)](bool ok) mutable {
+				fn(owner);
+			});
+		}
+		template<typename Fn> auto flushAsync(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<Stream>(), std::declval<bool>())) {
+			auto ptr = owner.ptr;
+			ptr->flushAsync([owner = std::move(owner), fn = std::forward<Fn>(fn)](bool ok) mutable {
+				fn(std::move(owner), ok);
+			});
+		}
+		template<typename Fn> auto flushAsync(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<Stream &>(),std::declval<bool>())) {
+			auto ptr = owner.ptr;
+			ptr->flushAsync([owner = std::move(owner), fn = std::forward<Fn>(fn)](bool ok) mutable {
+				fn(owner, ok);
+			});
+		}
+	};
+
+	///Flush stream
+	/** Function itself only constructs FlushHelper, which can be used to either flush synchronously
+	 * or asynchronously. If you append a callback function, the flush is performed asynchronously
+	 * The callback function can also receive ownership of the stream.
+	 *
+	 * The callback function can have zero, one or two arguments
+	 *
+	 * just call when done - no information of success is carried (you can check for exception)
+	 * @code
+	 * stream.flush() >> [=]{....}
+	 * @endcode
+	 *
+	 *
+	 * recive succes info
+	 * @code
+	 * stream.flush() >>  [=](bool succ){....}
+	 * @endcode
+	 *
+	 * carry the ownership and receive success info
+	 * stream.flush() >> [=](Stream &stream, bool succ){....};
+	 * @endcode
+	 */
+	FlushHelper flush() {return FlushHelper(*this);}
+
 	///Flush buffer synchronously
 	/** Flush any written content to the network, doesn't return, until whole buffer
 	 * is send
 	 */
-	void flush() {return ptr->flush();}
+	void flushSync() {return ptr->flush();}
 	///Flush buffer asynchronously
 	/**
 	 * Flushes the buffer to the network. Function returns immediately, the completion
@@ -242,12 +344,12 @@ public:
 	 *
 	 * @param fn callback function
 	 */
-	template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<Stream &>(), std::declval<bool>()))>
+	/*template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<Stream &>(), std::declval<bool>()))>
 	void flushAsync(Fn &&fn) {
 		ptr->flushAsync([fn = std::move(fn), s = std::move(*this)](bool succ) mutable {
 			fn(s, succ);
 		});
-	}
+	}*/
 	///Flush buffer asynchronously
 	/**
 	 * Flushes the buffer to the network. Function returns immediately, the completion
@@ -265,16 +367,16 @@ public:
 	 *
 	 * @param fn callback function
 	 */
-	void flushAsync(CallbackT<void(bool)> &&fn) {
+	/*void flushAsync(CallbackT<void(bool)> &&fn) {
 		ptr->flushAsync(std::move(fn));
-	}
+	}*/
 	///Determines wether the read or write operation timeouted
 	bool timeouted() const {return ptr->timeouted();}
 
 	void clearTimeout() {ptr->clearTimeout();}
 	///retrieve a char from the stream (synchronously)
 	int getChar() {
-		auto c = read();
+		auto c = readSync();
 		if (c.empty()) return -1;
 		else {
 			putBack(c.substr(1));
@@ -290,7 +392,7 @@ public:
 	 */
 	bool getLine(std::string &ln, std::string_view sep = "\n") {
 		ln.clear();
-		auto b = read();
+		auto b = readSync();
 		int e = 0;
 		while (!b.empty()) {
 			ln.append(b);
@@ -496,7 +598,7 @@ template<typename SS>
 std::string_view LimitedStream<SS>::read() {
 	if (curBuff.empty()) {
 		if (maxRead == 0) return std::string_view();
-		auto rd = source.read();
+		auto rd = source.readSync();
 		auto res = rd.substr(0, maxRead);
 		source.putBack(rd.substr(res.length()));
 		maxRead -= res.length();
@@ -556,10 +658,10 @@ inline void LimitedStream<SS>::readAsync(CallbackT<void(const std::string_view &
 		if (maxRead == 0) {
 			fn(std::string_view());
 		} else {
-			source.readAsync([fn = std::move(fn), this](const std::string_view &data) mutable {
+			source.read() >> [fn = std::move(fn), this](const std::string_view &data) mutable {
 				source.putBack(data);
 				fn(read());
-			});
+			};
 		}
 	} else {
 		std::string_view b;
@@ -578,7 +680,7 @@ inline bool LimitedStream<SS>::writeNB(const std::string_view &data) {
 
 template<typename SS>
 inline void LimitedStream<SS>::flushAsync(CallbackT<void(bool)> &&fn) {
-	source.flushAsync(std::move(fn));
+	source.flush()>> std::move(fn);
 }
 
 template<typename SS>
@@ -613,7 +715,7 @@ inline std::string_view ChunkedStream<SS>::read() {
 				eof = true;return std::string_view();
 			}
 		}
-		auto rd = source.read();
+		auto rd = source.readSync();
 		auto out = rd.substr(0,readRemain);
 		source.putBack(rd.substr(out.length()));
 		readRemain -= out.length();
@@ -696,10 +798,10 @@ inline bool ChunkedStream<SS>::timeouted() const {
 template<typename SS>
 inline void ChunkedStream<SS>::readAsync(CallbackT<void(const std::string_view &data)> &&fn) {
 	if (curBuff.empty()) {
-		source.readAsync([fn = std::move(fn),this](const std::string_view &data) {
+		source.read() >> [fn = std::move(fn),this](const std::string_view &data) {
 			source.putBack(data);
 			fn(read());
-		});
+		};
 	} else {
 		std::string_view out;
 		std::swap(out,curBuff);
@@ -719,7 +821,7 @@ inline void ChunkedStream<SS>::flushAsync(CallbackT<void(bool)> &&fn) {
 	if (closed) curChunk.clear();
 	else {
 		maxChunkSize = std::max<decltype(maxChunkSize)>(source.getOutputBufferSize(),20)-20;
-		source.flushAsync(std::move(fn));
+		source.flush() >> std::move(fn);
 	}
 }
 

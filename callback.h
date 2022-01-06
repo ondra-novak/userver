@@ -102,6 +102,26 @@ protected:
 	std::unique_ptr<CBIfc> ptr;
 };
 
+///Used to throw exception in callback, if the callback is called as response to an error
+/**
+ * @code
+ * stream.read() >> [=](std::string_view data) {
+ * 	try {
+ * 		cb_rethrow(); // throw any pending error
+ * 		//... continue processing data
+ * 	} catch (std::exception &e) {
+ * 		//handle error here
+ * 	}
+ * }
+ * @endcode
+ */
+static inline void cb_rethrow() {
+	auto exp = std::current_exception();
+	if (exp != nullptr) {
+		std::rethrow_exception(exp);
+	}
+}
+
 
 }
 

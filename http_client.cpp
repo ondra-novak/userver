@@ -101,7 +101,7 @@ Stream& HttpClientRequest::beginBody() {
 	}
 }
 
-int HttpClientRequest::send() {
+int HttpClientRequest::sendSync() {
 	if (!header_sent) finish_headers(false);
 	userStream.reset();
 	s.flush();
@@ -143,12 +143,12 @@ void HttpClientRequest::prepareUserStream() {
 void HttpClientRequest::sendAsync(CallbackT<void(int)> &&cb) {
 	if (!header_sent) finish_headers(true);
 	userStream.reset();
-	s.flushAsync([this, cb = std::move(cb)](bool ok) mutable {
+	s.flush()>>[this, cb = std::move(cb)](bool ok) mutable {
 		if (!ok) {
 			status = -1;
 			cb(status);
 		} else {
-			s.readAsync([this, cb = std::move(cb)](const std::string_view &data) mutable {
+			s.read() >> [this, cb = std::move(cb)](const std::string_view &data) mutable {
 				if (data.empty()) {
 					status = -1;
 				} else {
@@ -160,9 +160,9 @@ void HttpClientRequest::sendAsync(CallbackT<void(int)> &&cb) {
 					}
 				}
 				cb(status);
-			});
+			};
 		}
-	});
+	};
 }
 
 Stream& HttpClientRequest::getResponse() {
@@ -456,10 +456,10 @@ void HttpClient::sendRequest(const Method &method, const URL &url, HeaderList he
 		else {
 			for (const auto &hp: hdrs) req->addHeader(hp.first, hp.second);
 			auto reqptr = req.get();
-			reqptr->sendAsync([req = std::move(req), cb = std::move(cb)](int status) mutable {
+			reqptr->send() >> [req = std::move(req), cb = std::move(cb)](int status) mutable {
 				if (status < 0) cb(nullptr);
 				else cb(std::move(req));
-			});
+			};
 		}
 	});
 }
@@ -506,7 +506,9 @@ public:
 	StreamWrap(Stream &s, std::unique_ptr<HttpClientRequest> &&req):req(std::move(req)),s(s) {}
 
 	virtual std::string_view read() override {return s.read();}
-	virtual void readAsync(CallbackT<void(const std::string_view &data)> &&fn) override {return s.readAsync(std::move(fn));}
+	virtual void readAsync(CallbackT<void(const std::string_view &data)> &&fn) override {
+		return s.read() >> std::move(fn);
+	}
 	virtual void putBack(const std::string_view &pb) override {return s.putBack(pb);}
 	virtual void write(const std::string_view &) override {}
 	virtual bool writeNB(const std::string_view &) override {return false;}

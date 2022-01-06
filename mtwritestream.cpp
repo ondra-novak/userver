@@ -95,7 +95,7 @@ void MTWriteStream::sendAsync(std::shared_ptr<MTWriteStream> me, const std::stri
 		//finally write extra line carried by argument
 		me->writeNB(ln);
 		//flush stream asynchronously
-		me->flushAsync([me](bool ok){
+		me->flush() >> [me](bool ok){
 			//locked thread continues here
 			if (!ok) {
 				//if flush fails, mark stream closed
@@ -104,13 +104,13 @@ void MTWriteStream::sendAsync(std::shared_ptr<MTWriteStream> me, const std::stri
 				//repeat sendAsync
 				me->sendAsync(me, std::string());
 			}
-		});
+		};
 
 }
 
 
 void MTWriteStream::monitor(std::shared_ptr<MTWriteStream> me, CallbackT<void(const std::string_view &)> &&cb) {
-	me->readAsync([me,cb = std::move(cb)](const std::string_view &data) mutable {
+	me->read() >> [me,cb = std::move(cb)](const std::string_view &data) mutable {
 		if (!data.empty()) {
 			cb(data);
 			monitor(me, std::move(cb));
@@ -121,7 +121,7 @@ void MTWriteStream::monitor(std::shared_ptr<MTWriteStream> me, CallbackT<void(co
 			cb(data);
 			me->closed = true;
 		}
-	});
+	};
 }
 
 

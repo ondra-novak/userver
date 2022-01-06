@@ -523,7 +523,7 @@ void HttpServerRequest::readBodyAsync(std::unique_ptr<HttpServerRequest> &&req, 
 
 template<typename Fn>
 void HttpServerRequest::readBodyAsync2(Stream &s, std::vector<char> &buffer, std::size_t maxSize, bool overflow, Fn &&fn) {
-	s.readAsync([buffer = std::move(buffer), maxSize, fn = std::move(fn), overflow, this](Stream &s, const std::string_view &data) mutable {
+	s.read() >> [buffer = std::move(buffer), maxSize, fn = std::move(fn), overflow, this](Stream &s, const std::string_view &data) mutable {
 		if (data.size() + buffer.size() > maxSize) {
 			overflow = true;
 		} else if (data.empty()) {
@@ -544,7 +544,7 @@ void HttpServerRequest::readBodyAsync2(Stream &s, std::vector<char> &buffer, std
 			std::copy(data.begin(), data.end(), std::back_inserter(buffer));
 		}
 		readBodyAsync2(s, buffer, maxSize, overflow, std::move(fn));
-	});
+	};
 }
 
 

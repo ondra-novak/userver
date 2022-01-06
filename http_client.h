@@ -87,6 +87,45 @@ public:
 	 * @note if length of the body was not set, then chunked transfer is used
 	 */
 	Stream &beginBody();
+
+	class SendHelper {
+	public:
+		SendHelper(HttpClientRequest &owner):owner(owner) {};
+		SendHelper(const SendHelper &other) = delete;
+		operator int() {
+			if (!status.has_value()) status = owner.sendSync();
+			return *status;
+		}
+		template<typename Fn> void operator >> (Fn &&fn) {
+			status=100;
+			sendAsync(std::move(fn));
+		}
+		~SendHelper() noexcept(false) {
+			if (!status.has_value()) status = owner.sendSync();
+		}
+
+	protected:
+		HttpClientRequest &owner;
+		std::optional<int> status;
+		template<typename Fn> auto sendAsync(Fn &&fn) -> decltype(std::declval<Fn>()()) {
+			owner.sendAsync([fn = std::move(fn)](int){
+				fn();
+			});
+		}
+		template<typename Fn> auto sendAsync(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<int>())) {
+			owner.sendAsync(std::forward<Fn>(fn));
+		}
+	};
+
+	///Sends the prepared request
+	/**
+	 * The function just create helper object. You can attach a callback function to process request
+	 * asynchronously. The callback function receives zero or one parameter (status as int).
+	 *
+	 * If you doesn't pick return value, the function is executed synchronously
+	 */
+	SendHelper send() {return SendHelper(*this);}
+
 	///Send the prepared request
 	/** Sends prepared request. It finalizes body, if it was started by beginBody(). Note that
 	 * stream for the body becomes unavailable
@@ -96,7 +135,7 @@ public:
 	 * @return status code. Function returns -1 when the connection has been lost or
 	 * timeouted
 	 */
-	int send();
+	int sendSync();
 
 	///Send request with body,
 	/**
@@ -107,13 +146,6 @@ public:
 	template<typename Fn, typename = decltype(std::string_view(std::declval<Fn>()))>
 	int send(Fn &&body);
 
-	///Sends request asynchronously
-	/**
-	 * @param cb a callback function is called with a status code.
-	 *
-	 * @see send
-	 */
-	void sendAsync(CallbackT<void(int)> &&cb);
 
 	///Sends request with body asynchronously
 	/**
@@ -185,6 +217,13 @@ public:
 	static Stream getResponseBody(std::unique_ptr<HttpClientRequest> &&req);
 
 protected:
+	///Sends request asynchronously
+	/**
+	 * @param cb a callback function is called with a status code.
+	 *
+	 * @see send
+	 */
+	void sendAsync(CallbackT<void(int)> &&cb);
 
 	void addHeaderInternal(const std::string_view &key, const std::string_view &value);
 
@@ -339,10 +378,10 @@ inline void userver::HttpClientRequest::sendAsyncCont(Fn &&body, CallbackT<void(
 	std::string_view data = body();
 	while (!data.empty()) {
 		if (s.writeNB(data)) {
-			s.flushAsync([this, body = std::forward<Fn>(body), cb = std::move(cb)](bool ok) mutable {
+			s.flush() >> [this, body = std::forward<Fn>(body), cb = std::move(cb)](bool ok) mutable {
 				if (!ok) cb(-1);
 				sendAsyncCont(std::forward<Fn>(body), std::move(cb));
-			});
+			};
 		} else {
 			data = body();
 		}
