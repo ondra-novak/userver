@@ -640,6 +640,10 @@ OpenAPIServer::PathInfo OpenAPIServer::PathInfo::handler(Handler &&handler) {
 	return *this;
 }
 
+OpenAPIServer::PathInfo userver::OpenAPIServer::PathInfo::operator >>(Handler &&h) {
+	return handler(std::move(h));
+}
 
 
 }
+

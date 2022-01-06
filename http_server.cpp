@@ -1268,4 +1268,34 @@ std::string HttpServerRequest::getURL() const {
 	return ret;
 }
 
+bool HttpServerRequest::readBody(std::size_t maxSize, std::vector<char> &out) {
+	if (!reserveBodyBuffer(maxSize, out)) return false;
+	Stream s = getBody();
+	std::string_view b = s.read();
+	while (!b.empty()) {
+		std::copy(b.begin(), b.end(), std::back_insert_iterator(out));
+		if (out.size()>maxSize) {
+			sendErrorPage(413);
+			return false;
+		}
+		b = s.read();
+	}
+	return true;
+}
+
+bool HttpServerRequest::reserveBodyBuffer(std::size_t maxSize, std::vector<char> &buffer) {
+	buffer.clear();
+	HeaderValue hv = get("Content-Length");
+	if (hv.defined){
+		auto sz = hv.getUInt();
+		if (sz >maxSize) {
+			sendErrorPage(413);
+			return false;
+		} else {
+			buffer.reserve(sz);
+		}
+	}
+	return true;
+}
+
 }

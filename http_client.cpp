@@ -306,7 +306,7 @@ std::unique_ptr<ISocket> HttpClient::connect(const NetAddr &addr, const CrackedU
 	}
 	return s;
 }
-std::unique_ptr<HttpClientRequest> HttpClient::open(const Method &method, const URL &url) {
+std::unique_ptr<HttpClientRequest> HttpClient::openSync(const Method &method, const URL &url) {
 
 	auto cu = crackUrl(url);
 	if (!cu.valid) return nullptr;
@@ -352,7 +352,7 @@ void HttpClient::connectAsync(NetAddrList &&list, CrackedURL &&cu, Fn &&fn, unsi
 	});
 }
 
-void HttpClient::open(const Method &method, const URL &url,Callback  &&callback) {
+void HttpClient::openAsync(const Method &method, const URL &url,Callback  &&callback) {
 
 
 	getCurrentAsyncProvider().runAsync([this,
@@ -429,7 +429,7 @@ HttpClient::CrackedURL HttpClient::crackUrl(const std::string_view &url) {
 }
 
 std::unique_ptr<HttpClientRequest> HttpClient::sendRequest(const Method &method, const URL &url, HeaderList headers) {
-	auto req = open(method, url);
+	auto req = openSync(method, url);
 	if (req == nullptr) return req;
 	for (const HeaderPair &hp: headers) req->addHeader(hp.first, hp.second);
 	if (req->send() < 0) return nullptr;
@@ -437,7 +437,7 @@ std::unique_ptr<HttpClientRequest> HttpClient::sendRequest(const Method &method,
 }
 
 std::unique_ptr<HttpClientRequest> HttpClient::sendRequest(const Method &method, const URL &url, HeaderList headers, const Data &data) {
-	auto req = open(method, url);
+	auto req = openSync(method, url);
 	if (req == nullptr) return req;
 	for (const HeaderPair &hp: headers) req->addHeader(hp.first, hp.second);
 	req->setBodyLength(data.size());
@@ -449,7 +449,7 @@ std::unique_ptr<HttpClientRequest> HttpClient::sendRequest(const Method &method,
 
 void HttpClient::sendRequest(const Method &method, const URL &url, HeaderList headers, Callback &&cb) {
 	std::vector<HeaderPair> hrds(headers.begin(), headers.end());
-	open(method, url, [cb = std::move(cb), hdrs = std::move(hrds)](
+	open(method, url) >> [cb = std::move(cb), hdrs = std::move(hrds)](
 			std::unique_ptr<HttpClientRequest> &&req
 	)mutable{
 		if (req == nullptr) cb(nullptr);
@@ -461,12 +461,12 @@ void HttpClient::sendRequest(const Method &method, const URL &url, HeaderList he
 				else cb(std::move(req));
 			};
 		}
-	});
+	};
 }
 
 void HttpClient::sendRequest(const Method &method, const URL &url, HeaderList headers, DataStream &&data, Callback &&cb) {
 	std::vector<HeaderPair> hrds(headers.begin(), headers.end());
-	open(method, url, [cb = std::move(cb), data= std::move(data), hdrs = std::move(hrds)](
+	open(method, url) >> [cb = std::move(cb), data= std::move(data), hdrs = std::move(hrds)](
 			std::unique_ptr<HttpClientRequest> &&req
 	)mutable{
 		if (req == nullptr) cb(nullptr);
@@ -478,7 +478,7 @@ void HttpClient::sendRequest(const Method &method, const URL &url, HeaderList he
 				else cb(std::move(req));
 			});
 		}
-	});
+	};
 }
 
 
@@ -580,7 +580,7 @@ void HttpClient::sendRequest(const Method &method, const URL &url,
 		HeaderList headers, const Data &data, Callback &&cb) {
 	std::vector<HeaderPair> hrds(headers.begin(), headers.end());
 	StringSource sdata(data);
-	open(method, url, [cb = std::move(cb), sdata= std::move(sdata), hdrs = std::move(hrds)](
+	open(method, url) >> [cb = std::move(cb), sdata= std::move(sdata), hdrs = std::move(hrds)](
 			std::unique_ptr<HttpClientRequest> &&req
 	)mutable{
 		if (req == nullptr) cb(nullptr);
@@ -593,7 +593,7 @@ void HttpClient::sendRequest(const Method &method, const URL &url,
 				else cb(std::move(req));
 			});
 		}
-	});
+	};
 }
 
 }

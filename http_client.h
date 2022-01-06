@@ -251,6 +251,7 @@ protected:
 
 };
 
+using PHttpClientRequest = std::unique_ptr<HttpClientRequest>;
 
 struct HttpClientCfg {
 
@@ -276,24 +277,39 @@ public:
 
 	HttpClient(HttpClientCfg &&cfg);
 
+	class OpenHelper {
+	public:
+		OpenHelper(HttpClient &owner,const Method &method,const URL &url)
+		:owner(owner),method(method),url(url) {}
+		OpenHelper(const OpenHelper &) = delete;
+		operator PHttpClientRequest() {
+			return owner.openSync(method,url);
+		}
+		template<typename Fn>void operator >> (Fn &&fn) {openAsync(std::move(fn));}
 
-	///Open new request
-	/**
-	 * @param method method
-	 * @param url url
-	 * @return connected request. If result is null, then connection cannot be established
-	 */
-	std::unique_ptr<HttpClientRequest> open(const Method &method,
-											const URL &url);
+	protected:
+		template<typename Fn> auto openAsync(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<PHttpClientRequest>())) {
+			owner.openAsync(method, url, std::forward<Fn>(fn));
+		}
+		HttpClient &owner;
+		const Method &method;
+		const URL &url;
+	};
 
-	///Open request asynchronously
+	///Open the request
 	/**
-	 * @param method method
-	 * @param url url
-	 * @param callback function called, when request is ready. The argument contains
-	 * connected request. If the argument is null, then connection cannot be established
+	 * @param method to open: GET, POST, PUT, etc
+	 * @param url url to open.
+	 * @return function returns PHttpClientRequest (you need to request PHttpClientRequest, auto will
+	 * not work). You can also chain callback function to process the operation asynchronously
+	 *
+	 * @code
+	 * httpc.open("GET","http://example.com") >> [=](PHttpClientRequest &req) {....};
+	 * @endcode
 	 */
-	void open(const Method &method, const URL &url, Callback &&callback);
+	OpenHelper open(const Method &method,const URL &url) {
+		return OpenHelper(*this,method, url);
+	}
 
 	using HeaderPair = std::pair<std::string_view, std::string_view>;
 
@@ -328,6 +344,24 @@ public:
 
 
 protected:
+	///Open new request
+	/**
+	 * @param method method
+	 * @param url url
+	 * @return connected request. If result is null, then connection cannot be established
+	 */
+	std::unique_ptr<HttpClientRequest> openSync(const Method &method,
+											const URL &url);
+
+	///Open request asynchronously
+	/**
+	 * @param method method
+	 * @param url url
+	 * @param callback function called, when request is ready. The argument contains
+	 * connected request. If the argument is null, then connection cannot be established
+	 */
+	void openAsync(const Method &method, const URL &url, Callback &&callback);
+
 	HttpClientCfg cfg;
 
 	struct CrackedURL {

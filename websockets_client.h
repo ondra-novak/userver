@@ -34,7 +34,7 @@ inline std::unique_ptr<WSStream> wsConnect(HttpClient &httpclient, const HttpCli
 
 template<typename Fn>
 void wsConnectAsync(HttpClient &httpclient, const HttpClient::URL &url, Fn &&callback) {
-	httpclient.open("GET", url, [callback = std::forward<Fn>(callback)](std::unique_ptr<HttpClientRequest> &&req) mutable {
+	httpclient.open("GET", url) >> [callback = std::forward<Fn>(callback)](std::unique_ptr<HttpClientRequest> &&req) mutable {
 		if (req == nullptr) {
 			callback(0, nullptr);
 		} else {
@@ -54,7 +54,7 @@ void wsConnectAsync(HttpClient &httpclient, const HttpClient::URL &url, Fn &&cal
 
 			};
 		}
-	});
+	};
 }
 
 

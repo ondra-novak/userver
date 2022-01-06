@@ -110,6 +110,7 @@ public:
 		PathInfo(OpenAPIServer &owner, int pathIndex, int methodIndex):owner(owner),pathIndex(pathIndex), methodIndex(methodIndex) {}
 
 		PathInfo handler(Handler &&handler);
+		PathInfo operator>>(Handler &&handler);
 		PathInfo GET(const std::string_view &tag,
 					const std::string_view &summary,
 					const std::string_view &desc,

@@ -194,27 +194,72 @@ public:
 	std::intptr_t getResponseSize() const;
 	unsigned int getStatus() const;
 
-	///Asynchronously read a large body
-	/**
-	 * @param maxSize maximum allowed size of the body. If the body is larger, apropriate error status is generated and callback is not called
-	 * @param fn callback function called when reading is done. It receives buffer containing the whole body
-	 */
-	template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<std::string_view>()))>
-	void readBodyAsync(std::size_t maxSize, Fn &&fn);
 
 
-	///Asynchronously read a large body, transfer ownership of the request to the callback function
+
+	class BodyReader {
+	public:
+		BodyReader(std::unique_ptr<HttpServerRequest> &req, std::size_t maxSize):req(req),maxSize(maxSize) {}
+
+		template<typename Fn>
+		void operator >> (Fn &&fn) {
+			readAsync(std::forward<Fn>(fn));
+		}
+
+	protected:
+
+		template<typename Fn>
+		auto readAsync(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<std::string_view>())) {
+			req->readBodyAsync(maxSize, std::forward<Fn>(fn));
+		}
+		template<typename Fn>
+		auto readAsync(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<std::unique_ptr<HttpServerRequest> &>(),std::declval<std::string_view>())) {
+			req->readBodyAsync(std::move(req),maxSize, std::forward<Fn>(fn));
+		}
+
+		std::unique_ptr<HttpServerRequest> &req;
+		std::size_t maxSize;
+
+	};
+
+	///Reads body executes callback, when whole body is read
 	/**
+	 * @param req function is static and need unique pointer to the request. Depend on callback declaration it
+	 * can pass ownership to the callback
+	 * @param maxSize maximum body size. If the body size is bigger, then callback is not called, and
+	 * request is responsed with code 413.
 	 *
-	 * @param reqptr request pointer - note this function is static and expects that
-	 * it object is accessed through an unique pointer. The ownership of the pointer is
-	 * transfered to the callback function
+	 * You need to chain callback function to correctly use this function
 	 *
-	 * @param maxSize maximum alloved size of the body
-	 * @param fn function which receives pointer to request and the buffer containing the body
+	 * @code
+	 * req->readBody(req, maxSize) >> [=](std::string_view data) {
+	 *   //.. process data now
+	 * }
+	 * @endcode
+	 *
+	 * The callback function can receive the request. In this case, the request is no longer available
+	 * in current context
+	 *
+	 * @code
+	 * req->readBody(req,maxSize) >> [=](PHttpServerRequest &req, std::string_view body) {
+	 * 	// .. process data, use req to send response
+	 * }
+	 * @endcode
+	 *
 	 */
-	template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<std::unique_ptr<HttpServerRequest> &>(), std::declval<std::string_view>()))>
-	static void readBodyAsync(std::unique_ptr<HttpServerRequest> &&reqptr,std::size_t maxSize, Fn &&fn);
+	static BodyReader readBody(std::unique_ptr<HttpServerRequest> &req, std::size_t maxSize) {
+		return BodyReader(req, maxSize);
+	}
+
+	///Synchronously read whole body
+	/**
+	 * @param max allowed body size
+	 * @param out buffer which receives the body.
+	 * @retval true, request processed successfuly
+	 * @retval false, request body was too large, status code was set. Request cannot continue
+	 */
+	bool readBody(std::size_t maxSize, std::vector<char> &out);
+
 
 	///Redirects to directory
 	/** you need to call this, if you receive empty vpath and you need to refer objects in subdirectory
@@ -281,8 +326,30 @@ protected:
 	void log2(LogLevel lev, const T &a, const Args & ... args);
 	void log2(LogLevel lev);
 
+	///Asynchronously read a large body
+	/**
+	 * @param maxSize maximum allowed size of the body. If the body is larger, apropriate error status is generated and callback is not called
+	 * @param fn callback function called when reading is done. It receives buffer containing the whole body
+	 */
+	template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<std::string_view>()))>
+	void readBodyAsync(std::size_t maxSize, Fn &&fn);
+	///Asynchronously read a large body, transfer ownership of the request to the callback function
+	/**
+	 *
+	 * @param reqptr request pointer - note this function is static and expects that
+	 * it object is accessed through an unique pointer. The ownership of the pointer is
+	 * transfered to the callback function
+	 *
+	 * @param maxSize maximum alloved size of the body
+	 * @param fn function which receives pointer to request and the buffer containing the body
+	 */
+	template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<std::unique_ptr<HttpServerRequest> &>(), std::declval<std::string_view>()))>
+	static void readBodyAsync(std::unique_ptr<HttpServerRequest> &&reqptr,std::size_t maxSize, Fn &&fn);
+
 	template<typename Fn>
 	void readBodyAsync2(Stream &s, std::vector<char> &buffer, std::size_t maxSize, bool overflow, Fn &&fn);
+
+	bool reserveBodyBuffer(std::size_t maxSize, std::vector<char> &buffer);
 
 };
 
@@ -497,18 +564,10 @@ inline void HttpServerRequest::log2(LogLevel lev, const T &a, const Args &... ar
 template<typename Fn, typename>
 void HttpServerRequest::readBodyAsync(std::size_t maxSize, Fn &&fn) {
 	std::vector<char> buffer;
-	HeaderValue hv = get("Content-Length");
-	if (hv.defined){
-		auto sz = hv.getUInt();
-		if (sz >maxSize) {
-			sendErrorPage(413);
-			return ;
-		} else {
-			buffer.reserve(sz);
-		}
+	if (reserveBodyBuffer(maxSize, buffer)) {
+		Stream s = getBody();
+		readBodyAsync2(s, buffer, maxSize, false, std::move(fn));
 	}
-	Stream s = getBody();
-	readBodyAsync2(s, buffer, maxSize, false, std::move(fn));
 
 }
 

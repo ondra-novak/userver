@@ -7,6 +7,10 @@
 
 #ifndef SRC_USERVER_CALLBACK_H_
 #define SRC_USERVER_CALLBACK_H_
+#include <cassert>
+#include <typeinfo>
+
+using std::type_info;
 
 namespace userver {
 
@@ -92,6 +96,7 @@ public:
 		ptr = std::move(other.ptr);return *this;
 	}
 	Ret operator()(Args ... args) const  {
+		if (ptr == nullptr) throw std::runtime_error(std::string("Callback is not callable: ").append(typeid(CBIfc).name()));
 		return ptr->invoke(std::forward<Args>(args)...);
 	}
 	void reset() {
@@ -100,6 +105,7 @@ public:
 
 protected:
 	std::unique_ptr<CBIfc> ptr;
+
 };
 
 ///Used to throw exception in callback, if the callback is called as response to an error
