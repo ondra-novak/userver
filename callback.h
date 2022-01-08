@@ -9,6 +9,7 @@
 #define SRC_USERVER_CALLBACK_H_
 #include <cassert>
 #include <typeinfo>
+#include <atomic>
 
 using std::type_info;
 
@@ -30,26 +31,126 @@ public:
 	virtual ~ICallbackT() {}
 };
 
+#ifdef USERVER_CALLBACK_FASTALLOC
+
+template<std::size_t sz> class Allocator {
+public:
+
+	Allocator():root(0),closed(false) {}
+	~Allocator() {
+		closed.store(true);
+		Block *b = root.exchange(nullptr);
+		while (b) {
+			Block *c = b->next;
+			delete b;
+			b = c;
+		}
+	}
+
+	static Allocator &getInstance() {
+		static Allocator inst;
+		return inst;
+	}
+
+	struct Block {
+		Block *next;
+		char data[sz];
+	};
+
+	void *alloc(std::size_t asz) {
+		assert(asz <= sz);
+		Block *t = root.exchange(nullptr);
+		if (t == nullptr) {
+			Block *b = new Block;
+			return b->data;
+		} else {
+			Block *nx = t->next;
+			Block *rest = root.exchange(nx);
+			while (rest) {
+				Block *z = rest->next;
+				insert(rest);
+				rest = z;
+			}
+			return t->data;
+		}
+	}
+
+	void insert(Block *b) {
+		if (closed.load()) delete b;
+		else {
+			Block *z = root;
+			do {
+				b->next = z;
+			} while (!root.compare_exchange_strong(z, b));
+		}
+	}
+
+	void free(void *data) {
+		auto c = reinterpret_cast<char *>(data);
+		c-=offsetof(Block,data);
+		Block *b = reinterpret_cast<Block *>(c);
+		insert(b);
+	}
+private:
+	std::atomic<Block *> root;
+	std::atomic<bool> closed;
+};
+
+#endif
+
 template<typename Ret, typename ... Args> class CallbackT<Ret(Args...)> {
 public:
 	using CBIfc = ICallbackT<Ret(Args...)>;
 
+	template<typename Fn> class Call1: public CBIfc {
+	public:
+		Call1(Fn &&fn):fn(std::forward<Fn>(fn)) {}
+		virtual Ret invoke(Args ... args) const override {
+			return fn(std::forward<Args>(args)...);
+		}
+		~Call1() {
+
+		}
+#ifdef USERVER_CALLBACK_FASTALLOC
+		void *operator new(std::size_t sz);
+		void operator delete(void *ptr, std::size_t sz);
+#endif
+	protected:
+		mutable std::remove_reference_t<Fn> fn;
+
+	};
+
+	template<typename Fn, typename CancelCallback>
+	class Call2: public CBIfc {
+	public:
+		Call2(Fn &&fn, CancelCallback &&cfn):fn(std::forward<Fn>(fn)),cfn(std::forward<CancelCallback>(cfn)) {}
+		virtual Ret invoke(Args ... args) const override {
+			called = true;
+			return fn(std::forward<Args>(args)...);
+		}
+		~Call2() {
+			if (!called) {
+				try {
+					cfn();
+				} catch (...) {
+
+				}
+			}
+
+		}
+#ifdef USERVER_CALLBACK_FASTALLOC
+		void *operator new(std::size_t sz);
+		void operator delete(void *ptr, std::size_t sz);
+#endif
+	protected:
+		mutable std::remove_reference_t<Fn> fn;
+		mutable std::remove_reference_t<CancelCallback> cfn;
+		mutable bool called = false;
+	};
 
 	template<typename Fn, typename = decltype(std::declval<Fn>()(std::declval<Args>()...))>
 	CallbackT(Fn &&fn) {
-		class Impl: public CBIfc {
-		public:
-			Impl(Fn &&fn):fn(std::forward<Fn>(fn)) {}
-			virtual Ret invoke(Args ... args) const override {
-				return fn(std::forward<Args>(args)...);
-			}
-			~Impl() {
-
-			}
-		protected:
-			mutable std::remove_reference_t<Fn> fn;
-		};
-		ptr = std::make_unique<Impl>(std::forward<Fn>(fn));
+		ptr = std::make_unique<Call1<Fn> >(std::forward<Fn>(fn));
 	}
 
 	///Creates callback function which allows to defined reaction for situation when  callback is not called
@@ -61,29 +162,7 @@ public:
 				typename = decltype(std::declval<Fn>()(std::declval<Args>()...)),
 				typename = decltype(std::declval<CancelCallback>()())>
 	CallbackT(Fn &&fn, CancelCallback &&cfn) {
-		class Impl: public CBIfc {
-		public:
-			Impl(Fn &&fn, CancelCallback &&cfn):fn(std::forward<Fn>(fn)),cfn(std::forward<CancelCallback>(cfn)) {}
-			virtual Ret invoke(Args ... args) const override {
-				called = true;
-				return fn(std::forward<Args>(args)...);
-			}
-			~Impl() {
-				if (!called) {
-					try {
-						cfn();
-					} catch (...) {
-
-					}
-				}
-
-			}
-		protected:
-			mutable std::remove_reference_t<Fn> fn;
-			mutable std::remove_reference_t<CancelCallback> cfn;
-			mutable bool called = false;
-		};
-		ptr = std::make_unique<Impl>(std::forward<Fn>(fn), std::forward<CancelCallback>(cfn));
+		ptr = std::make_unique<Call2<Fn, CancelCallback> >(std::forward<Fn>(fn), std::forward<CancelCallback>(cfn));
 	}
 
 	CallbackT():ptr(nullptr) {}
@@ -102,6 +181,9 @@ public:
 	void reset() {
 		ptr = nullptr;
 	}
+#ifdef USERVER_CALLBACK_FASTALLOC
+	template<typename T> using Alloc = Allocator<((sizeof(T)+2*sizeof(int)-1)/(2*sizeof(int)))*2*sizeof(int)>;
+#endif
 
 protected:
 	std::unique_ptr<CBIfc> ptr;
@@ -128,9 +210,32 @@ static inline void cb_rethrow() {
 	}
 }
 
+#ifdef USERVER_CALLBACK_FASTALLOC
 
+template<typename Ret, typename ... Args>
+template<typename Fn>
+inline void* CallbackT<Ret(Args ...)>::Call1<Fn>::operator new(std::size_t sz) {
+	return Alloc<Call1>::getInstance().alloc(sz);
 }
 
+template<typename Ret, typename ... Args>
+template<typename Fn>
+inline void userver::CallbackT<Ret(Args...)>::Call1<Fn>::operator delete(void *ptr, std::size_t sz) {
+	return Alloc<Call1>::getInstance().free(ptr);
+}
+template<typename Ret, typename ... Args>
+template<typename Fn, typename Fn2>
+inline void* CallbackT<Ret(Args ...)>::Call2<Fn,Fn2>::operator new(std::size_t sz) {
+	return Alloc<Call2>::getInstance().alloc(sz);
+}
 
+template<typename Ret, typename ... Args>
+template<typename Fn, typename Fn2>
+inline void userver::CallbackT<Ret(Args...)>::Call2<Fn,Fn2>::operator delete(void *ptr, std::size_t sz) {
+	return Alloc<Call2>::getInstance().free(ptr);
+}
 
+#endif
+}
 #endif /* SRC_USERVER_CALLBACK_H_ */
+
