@@ -272,6 +272,7 @@ public:
 	static std::string_view contentTypeFromExtension(std::string_view extension);
 
 	void setContentTypeFromExt(std::string_view ext);
+	bool isResponseSent() const {return response_sent;}
 
 protected:
 

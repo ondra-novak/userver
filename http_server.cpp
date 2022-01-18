@@ -1048,8 +1048,20 @@ void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
 						newreq->reuse_buffers(req);
 						beginRequest(std::move(s), std::move(newreq));
 					});
-					if (!execHandlerByHost(req)) {
-						req->sendErrorPage(404);
+					try {
+						if (!execHandlerByHost(req)) {
+							req->sendErrorPage(404);
+						}
+					} catch (...) {
+						if (req != nullptr && !req->isResponseSent()) {
+							try{
+								req->sendErrorPage(500, "An unexpected error occurred while processing the request. See the log file for a description of the error");
+							} catch (...) {
+								//empty
+							}
+						}
+						throw;
+
 					}
 				}
 			});
