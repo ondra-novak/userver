@@ -381,6 +381,8 @@ protected:
 	template<typename Fn>
 	void connectAsync(NetAddrList &&list, CrackedURL &&cu, Fn &&fn, unsigned int index);
 
+public:
+
 	std::unique_ptr<HttpClientRequest> sendRequest(const Method &method, const URL &url, HeaderList headers);
 	std::unique_ptr<HttpClientRequest> sendRequest(const Method &method, const URL &url, HeaderList headers, const Data &data);
 	void sendRequest(const Method &method, const URL &url, HeaderList headers, Callback &&cb);
