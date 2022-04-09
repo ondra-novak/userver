@@ -110,39 +110,40 @@ public:
 		PathInfo(OpenAPIServer &owner, int pathIndex, int methodIndex):owner(owner),pathIndex(pathIndex), methodIndex(methodIndex) {}
 
 		PathInfo handler(Handler &&handler);
+		template<typename T, typename Q> PathInfo method(T ptr, bool (Q::*fn)(PHttpServerRequest &, const RequestParams &));
 		PathInfo operator>>(Handler &&handler);
-		PathInfo GET(const std::string_view &tag,
-					const std::string_view &summary,
-					const std::string_view &desc,
-					const std::initializer_list<ParameterObject> &params,
-					const std::initializer_list<ResponseObject> &responses,
+		PathInfo GET(const std::string_view &tag = std::string_view(),
+					const std::string_view &summary = std::string_view(),
+					const std::string_view &desc = std::string_view(),
+					const std::initializer_list<ParameterObject> &params = {},
+					const std::initializer_list<ResponseObject> &responses = {},
 					bool security=true,
 					bool deprecated=false);
-		PathInfo PUT(const std::string_view &tag,
-					const std::string_view &summary,
-					const std::string_view &desc,
-					const std::initializer_list<ParameterObject> &params,
-					const std::string_view &body_desc,
-					const std::initializer_list<MediaObject> &requests,
-					const std::initializer_list<ResponseObject> &responses,
+		PathInfo PUT(const std::string_view &tag = std::string_view(),
+					const std::string_view &summary = std::string_view(),
+					const std::string_view &desc = std::string_view(),
+					const std::initializer_list<ParameterObject> &params = {},
+					const std::string_view &body_desc  = std::string_view(),
+					const std::initializer_list<MediaObject> &requests = {},
+					const std::initializer_list<ResponseObject> &responses = {},
 					bool security=true,
 					bool deprecated=false);
-		PathInfo POST(const std::string_view &tag,
-					const std::string_view &summary,
-					const std::string_view &desc,
-					const std::initializer_list<ParameterObject> &params,
-					const std::string_view &body_desc,
-					const std::initializer_list<MediaObject> &requests,
-					const std::initializer_list<ResponseObject> &responses,
+		PathInfo POST(const std::string_view &tag  = std::string_view(),
+					const std::string_view &summary  = std::string_view(),
+					const std::string_view &desc = std::string_view(),
+					const std::initializer_list<ParameterObject> &params ={},
+					const std::string_view &body_desc = std::string_view(),
+					const std::initializer_list<MediaObject> &requests ={},
+					const std::initializer_list<ResponseObject> &responses={},
 					bool security=true,
 					bool deprecated=false);
-		PathInfo DELETE(const std::string_view &tag,
-					const std::string_view &summary,
-					const std::string_view &desc,
-					const std::initializer_list<ParameterObject> &params,
-					const std::string_view &body_desc,
-					const std::initializer_list<MediaObject> &requests,
-					const std::initializer_list<ResponseObject> &responses,
+		PathInfo DELETE(const std::string_view &tag = std::string_view(),
+					const std::string_view &summary = std::string_view(),
+					const std::string_view &desc = std::string_view(),
+					const std::initializer_list<ParameterObject> &params = {},
+					const std::string_view &body_desc = std::string_view(),
+					const std::initializer_list<MediaObject> &requests = {},
+					const std::initializer_list<ResponseObject> &responses = {},
 					bool security=true,
 					bool deprecated=false);
 
@@ -269,8 +270,16 @@ protected:
 };
 
 
+
+
+template<typename T, typename Q>
+inline OpenAPIServer::PathInfo userver::OpenAPIServer::PathInfo::method(
+		T ptr, bool (Q::*fn)(PHttpServerRequest&, const RequestParams&)) {
+	return handler([=](PHttpServerRequest& a, const RequestParams& b){
+		return ((*ptr).*fn)(a,b);
+	});
 }
 
-
-
+}
 #endif /* SRC_USERVER_OPENAPI_H_ */
+

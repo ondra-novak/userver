@@ -43,8 +43,8 @@ public:
 	 * Monitors stream
 	 *
 	 * @param me shared pointer to this instance. Function requires shared_ptr to the stream
-	 * @param cb callback. Function is called repatedly for every piece data received (receiving
-	 * is restared when callback returns). In case of end of stream is received, callback is
+	 * @param cb callback. Function is called repeatedly for every piece data received (receiving
+	 * is restarted when callback returns). In case of end of stream is received, callback is
 	 * called with empty string for the last time.
 	 *
 	 */
