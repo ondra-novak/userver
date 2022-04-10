@@ -248,6 +248,11 @@ std::string_view HttpServerRequest::getMethod() const {
 std::string_view HttpServerRequest::getPath() const {
 	return path;
 }
+std::string_view HttpServerRequest::getRootPath() const {
+	std::string_view p = path.substr(0, root_offset);
+	if (p.empty()) p = "/";
+	return p;
+}
 
 std::string_view HttpServerRequest::getHTTPVer() const {
 	return httpver;
@@ -847,6 +852,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 	auto iter = mapping->hostMapping.find(host);
 	auto iend = mapping->hostMapping.end();
 	if (iter == iend) {
+		req->setRootOffset(0);
 		if (execHandler(req, vpath)) {
 			_.unlock();
 			std::unique_lock __(mapping->shrmux);
@@ -858,6 +864,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 		auto p = vpath.find('/',1);
 		while (p<q) {
 			prefix = vpath.substr(0, p);
+			req->setRootOffset(p);
 			if (execHandler(req, vpath.substr(p))) {
 				_.unlock();
 				std::unique_lock __(mapping->shrmux);
@@ -882,6 +889,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 		}
 
 		auto plen = prefix.length();
+		req->setRootOffset(plen);
 		if (vpath.length() > plen
 			&& vpath.substr(0,plen) == prefix
 			&& vpath[plen] == '/'
@@ -900,6 +908,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 				prefix = std::string_view();
 			}
 			auto plen = prefix.length();
+			req->setRootOffset(plen);
 			if (vpath.length() > plen
 				&& vpath.substr(0,plen) == prefix
 				&& vpath[plen] == '/'
@@ -1149,10 +1158,10 @@ bool HttpServerRequest::directoryRedir() {
 	std::string_view query;
 	std::string_view path;
 	if (astq != path.npos) {
-		path = path.substr(0,astq);
-		query = path.substr(astq);
+		path = this->path.substr(0,astq);
+		query = this->path.substr(astq);
 	} else {
-		path = path;
+		path = this->path;
 	}
 	if (path.empty() || path.back() != '/') {
 		std::string newuri;

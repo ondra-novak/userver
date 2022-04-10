@@ -68,6 +68,7 @@ public:
 
 	void setKeepAliveCallback(KeepAliveCallback &&kc);
 	void setLogger(ILogger *log) {logger = log;}
+	void setRootOffset(std::size_t offset) {root_offset = offset;}
 
 	template<typename ... Args>
 	void log(LogLevel lev, const Args & ... data);
@@ -90,6 +91,8 @@ public:
 	std::string_view getMethod() const;
 	///Retrieves whole path - including query string.
 	std::string_view getPath()  const;
+	///Retrieves whole root path (path to host root - can be different depend on host and prefix)
+	std::string_view getRootPath()  const;
 	///Retrieves http version (HTTP/1.0 or HTTP/1.1)
 	std::string_view getHTTPVer()  const;
 	///Retrieves host header
@@ -289,6 +292,7 @@ protected:
 	bool hasBody = true;
 	bool hasExpect = false;
 	std::size_t ident = 0;
+	std::size_t root_offset = 0;
 	std::chrono::system_clock::time_point initTime;
 
 	static std::atomic<std::size_t> identCounter;

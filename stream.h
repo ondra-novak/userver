@@ -645,8 +645,8 @@ inline void LimitedStream<SS>::flush() {
 template<typename SS>
 inline LimitedStream<SS>::~LimitedStream() {
 	try {
-		closeOutput();
-		closeInput();
+		LimitedStream::closeOutput();
+		LimitedStream::closeInput();
 	} catch (...) {
 
 	}
@@ -691,8 +691,8 @@ inline bool LimitedStream<SS>::timeouted() const {
 template<typename SS>
 inline ChunkedStream<SS>::~ChunkedStream() {
 	try {
-		closeOutput();
-		closeInput();
+		ChunkedStream::closeOutput();
+		ChunkedStream::closeInput();
 	} catch (...) {
 
 	}
