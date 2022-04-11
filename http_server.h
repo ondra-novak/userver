@@ -611,6 +611,7 @@ void HttpServerRequest::readBodyAsync2(Stream &s, std::vector<char> &buffer, std
 	};
 }
 
+std::string_view getStatusCodeMsg(int code);
 
 
 }

@@ -90,7 +90,7 @@ static std::string_view statusMessages[] = {
 
 std::atomic<std::size_t> HttpServerRequest::identCounter(0);
 
-static std::string_view getStatusCodeMsg(int code) {
+std::string_view getStatusCodeMsg(int code) {
 	char num[100];
 	snprintf(num,100,"%d",code);
 	std::string_view codestr(num);
@@ -250,7 +250,6 @@ std::string_view HttpServerRequest::getPath() const {
 }
 std::string_view HttpServerRequest::getRootPath() const {
 	std::string_view p = path.substr(0, root_offset);
-	if (p.empty()) p = "/";
 	return p;
 }
 
