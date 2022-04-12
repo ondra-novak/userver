@@ -507,9 +507,9 @@ public:
 
 	virtual std::string_view read() override {return s.read();}
 	virtual void readAsync(CallbackT<void(const std::string_view &data)> &&fn) override {
-		return s.read() >> std::move(fn);
+		s.read() >> std::move(fn);
 	}
-	virtual void putBack(const std::string_view &pb) override {return s.putBack(pb);}
+	virtual void putBack(const std::string_view &pb) override {s.putBack(pb);}
 	virtual void write(const std::string_view &) override {}
 	virtual bool writeNB(const std::string_view &) override {return false;}
 	virtual void closeOutput() override  {}

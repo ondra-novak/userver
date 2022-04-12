@@ -161,7 +161,7 @@ public:
 	PathInfo addPath(const std::string_view &path);
 	using HttpServer::addPath;
 
-	std::string generateDef();
+	std::string generateDef(const std::string_view &root_path);
 
 	void addSwagFilePath(const std::string &path);
 	void addSwagBrowser(const std::string &path);
@@ -192,7 +192,7 @@ protected:
 
 	bool checkMethod(int pathIndex, PHttpServerRequest &req);
 
-	void generateDef(std::ostream &out);
+	void generateDef(std::ostream &out, const std::string_view &root_path);
 
 	static void serialize(_undefined::Obj &&obj, const OperationStruct &op, const std::string &opid);
 	static void serialize(_undefined::Obj &&obj, const ParameterObject &param);

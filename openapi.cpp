@@ -100,9 +100,9 @@ bool OpenAPIServer::checkMethod(int pathIndex, PHttpServerRequest &req) {
 }
 
 
-std::string OpenAPIServer::generateDef() {
+std::string OpenAPIServer::generateDef(const std::string_view &root_path) {
 	std::ostringstream out;
-	generateDef(out);
+	generateDef(out, root_path);
 	return out.str();
 
 }
@@ -263,7 +263,7 @@ static std::string generateOpID(std::string path, std::string method) {
 
 }
 
-void OpenAPIServer::generateDef(std::ostream &out) {
+void OpenAPIServer::generateDef(std::ostream &out, const std::string_view &root_path) {
 	using namespace _undefined;
 	Obj root(out);
 	root("openapi","3.0.3");
@@ -283,8 +283,11 @@ void OpenAPIServer::generateDef(std::ostream &out) {
 	}
 	{
 		Obj paths(root.object("paths"));
+		std::string root (root_path);
 		for (const auto &p: this->paths) {
-			Obj curpath( paths.object(p.path));
+			root.append(p.path);
+			Obj curpath( paths.object(root));
+			root.resize(root_path.size());
 			if (p.GET.has_value()) serialize(curpath.object("get"), *p.GET, generateOpID(p.path, "get"));
 			if (p.PUT.has_value()) serialize(curpath.object("put"), *p.PUT, generateOpID(p.path, "put"));
 			if (p.POST.has_value()) serialize(curpath.object("post"), *p.POST, generateOpID(p.path, "post"));
@@ -449,7 +452,7 @@ void OpenAPIServer::addSwagFilePath(const std::string &path) {
 	addPath(path, [&](PHttpServerRequest &req, const std::string_view &) {
 
 		req->setContentType("application/json");
-		req->send(generateDef());
+		req->send(generateDef(req->getRootPath()));
 		return true;
 
 	});
