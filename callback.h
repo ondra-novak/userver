@@ -191,6 +191,7 @@ public:
 	bool operator!=(std::nullptr_t) const {return ptr != nullptr;}
 	CallbackT(CallbackT &&other):ptr(std::move(other.ptr)) {}
 	CallbackT &operator=(CallbackT &&other) {
+		if (&other == this) return *this;
 		ptr = std::move(other.ptr);return *this;
 	}
 	Ret operator()(Args ... args) const  {
