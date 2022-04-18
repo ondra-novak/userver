@@ -575,26 +575,31 @@ void HttpServerRequest::sendErrorPage(int code) {
 	sendErrorPage(code, std::string_view());
 }
 
+static void std_error_page(HttpServerRequest &req, int code, const std::string_view &description) {
+	std::ostringstream body;
+	auto msg = getStatusCodeMsg(code);
+	body << "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+			"<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">"
+			"<html xmlns=\"http://www.w3.org/1999/xhtml\">"
+			"<head>"
+			"<title>" << code << " " << msg<<"</title>"
+			"</head>"
+			"<body>"
+			"<h1>"  << code << " " << msg <<"</h1>"
+			"<p><![CDATA[" << description << "]]></p>"
+			"</body>"
+			"</html>";
+	req.setContentType("application/xhtml+xml");
+	req.setStatus(code);
+	req.send(body.str());
+
+}
+
 void HttpServerRequest::sendErrorPage(int code, const std::string_view &description) {
 	if (!response_sent) {
-		std::ostringstream body;
-		auto msg = getStatusCodeMsg(code);
-		body << "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-				"<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">"
-				"<html xmlns=\"http://www.w3.org/1999/xhtml\">"
-				"<head>"
-				"<title>" << code << " " << msg<<"</title>"
-				"</head>"
-				"<body>"
-				"<h1>"  << code << " " << msg <<"</h1>"
-				"<p><![CDATA[" << description << "]]></p>"
-				"</body>"
-				"</html>";
-		setContentType("application/xhtml+xml");
-		setStatus(code);
-		send(body.str());
+		if (logger) logger->error_page(*this, code, description);
+		else std_error_page(*this, code, description);
 	}
-
 }
 
 void HttpServerRequest::setCookie(const std::string_view &name,
@@ -927,6 +932,7 @@ public:
 	Logger(HttpServer &owner):owner(owner) {}
 	virtual void handler_log(const HttpServerRequest &req, LogLevel level, const std::string_view &msg) noexcept;
 	virtual void log(ReqEvent event, const HttpServerRequest &req) noexcept;
+	virtual void error_page(HttpServerRequest &req, int status, const std::string_view &desc) noexcept;
 	HttpServer &owner;
 };
 
@@ -1012,24 +1018,27 @@ void HttpServer::stop() {
 	threads.clear();
 }
 
-void HttpServer::log(ReqEvent event, const HttpServerRequest &req) {
+void HttpServer::log(ReqEvent event, const HttpServerRequest &req) noexcept {
 	if (event == ReqEvent::done) {
 		std::lock_guard _(lock);
 		buildLogMsg(std::cout, req);
 	}
 }
 
-void HttpServer::log(const HttpServerRequest &, const std::string_view &msg) {
+void HttpServer::log(const HttpServerRequest &, const std::string_view &msg) noexcept {
 	std::lock_guard _(lock);
 	buildLogMsg(std::cout, msg);
 }
 
-void HttpServer::log(const HttpServerRequest &r, LogLevel, const std::string_view &msg) {
+void HttpServer::log(const HttpServerRequest &r, LogLevel, const std::string_view &msg) noexcept {
 	std::lock_guard _(lock);
 	log(r,msg);
 }
+void HttpServer::error_page(HttpServerRequest &r, int status, const std::string_view &desc) noexcept {
+	std_error_page(r, status, desc);
+}
 
-void HttpServer::unhandled() {
+void HttpServer::unhandled() noexcept {
 	try {
 		throw;
 	} catch (const std::exception &e) {
@@ -1146,6 +1155,10 @@ void Logger::handler_log(const HttpServerRequest &req, LogLevel level, const std
 
 void Logger::log(ReqEvent event, const HttpServerRequest &req) noexcept {
 	owner.log(event, req);
+}
+
+void Logger::error_page(HttpServerRequest &req, int status, const std::string_view &desc) noexcept {
+	owner.error_page(req,status,desc);
 }
 
 Stream& HttpServerRequest::getStream() {
