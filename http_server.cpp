@@ -122,6 +122,15 @@ std::size_t HeaderValue::getUInt() const {
 	return n;
 }
 
+
+std::string_view HeaderValue::splitAt(const std::string_view &at, std::string_view &where) {
+	return ::userver::splitAt(at,  where);
+}
+void HeaderValue::trim(std::string_view &what) {
+	::userver::trim(what);
+}
+
+
 bool HeaderValue::lessHeader(const std::pair<std::string_view, std::string_view> &a,
 				const std::pair<std::string_view, std::string_view> &b) {
 	auto ln = std::min(a.first.length(), b.first.length());
