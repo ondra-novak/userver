@@ -305,9 +305,13 @@ void OpenAPIServer::serializeSchema(_undefined::Obj &&obj, const Sch &param) {
 	if (type == "assoc") {
 		obj("type","object");
 		Obj prop (obj.object("additionalProperties"));
-		Arr anyOf (prop.array("anyOf"));
-		for (const auto &c: param.properties) {
-			serializeSchema(anyOf.object(), c);
+		if (param.properties.size() ==1) {
+			serializeSchema(std::move(prop), param.properties[0]);
+		} else {
+			Arr anyOf (prop.array("anyOf"));
+			for (const auto &c: param.properties) {
+				serializeSchema(anyOf.object(), c);
+			}
 		}
 		return;
 	} else if (type == "anyOf" || type == "allOf" || type == "oneOf") {

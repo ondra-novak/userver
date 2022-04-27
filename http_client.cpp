@@ -325,7 +325,7 @@ std::unique_ptr<HttpClientRequest> HttpClient::openSync(const Method &method, co
 	Stream stream(new SocketStream(std::move(socket)));
 	auto req = std::make_unique<HttpClientRequest>(std::move(stream));
 	req->open(method, cu.host, cu.path);
-	req->addHeader("UserAgent", cfg.userAgent);
+	req->addHeader("User-Agent", cfg.userAgent);
 	return req;
 }
 
