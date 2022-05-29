@@ -28,7 +28,7 @@ public:
 		bool success;
 
 		Task(Callback &&cb, bool success):cb(std::move(cb)), success(success) {}
-		Task():cb(nullptr),success(false) {}
+		Task():success(false) {}
 
 		bool valid() const {return cb != nullptr;}
 	};

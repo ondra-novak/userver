@@ -19,6 +19,7 @@
 #include "socket_server.h"
 #include "stream.h"
 #include "header_value.h"
+#include "shared/refcnt.h"
 
 namespace userver {
 
@@ -39,16 +40,22 @@ enum class LogLevel {
 	error,
 };
 
+class HttpServerRequest;
+
+class AbstractLogger: public ondra_shared::RefCntObj {
+public:
+    virtual void log(ReqEvent event,const HttpServerRequest &req) noexcept = 0;
+    virtual void handler_log(const HttpServerRequest &req, LogLevel lev, const std::string_view &msg) noexcept = 0;
+    virtual void error_page(HttpServerRequest &req, int status, const std::string_view &desc) noexcept= 0;
+    virtual ~AbstractLogger() {}
+};
+
+using PLogger = ondra_shared::RefCntPtr<AbstractLogger>;
+
+
 class HttpServerRequest {
 public:
 
-	class ILogger {
-	public:
-		virtual void log(ReqEvent event,const HttpServerRequest &req) noexcept = 0;
-		virtual void handler_log(const HttpServerRequest &req, LogLevel lev, const std::string_view &msg) noexcept = 0;
-		virtual void error_page(HttpServerRequest &req, int status, const std::string_view &desc) noexcept= 0;
-		virtual ~ILogger() {}
-	};
 
 	using KeepAliveCallback = CallbackT<void(Stream &, HttpServerRequest &)>;
 
@@ -68,7 +75,7 @@ public:
 	void reuse_buffers(HttpServerRequest &from);
 
 	void setKeepAliveCallback(KeepAliveCallback &&kc);
-	void setLogger(ILogger *log) {logger = log;}
+	void setLogger(PLogger log) {logger = log;}
 	void setRootOffset(std::size_t offset) {root_offset = offset;}
 
 	template<typename ... Args>
@@ -287,7 +294,7 @@ protected:
 
 	Stream stream;
 	KeepAliveCallback klcb;
-	ILogger *logger = nullptr;
+	PLogger logger;
 	bool enableKeepAlive = false;
 	bool valid = false;
 	bool hasBody = true;
@@ -546,10 +553,24 @@ public:
 
 
 protected:
+
+	class Logger: public AbstractLogger {
+	public:
+	    Logger(HttpServer &owner):owner(owner) {}
+	    virtual ~Logger() {}
+	    virtual void handler_log(const HttpServerRequest &req, LogLevel level, const std::string_view &msg) noexcept;
+	    virtual void log(ReqEvent event, const HttpServerRequest &req) noexcept;
+	    virtual void error_page(HttpServerRequest &req, int status, const std::string_view &desc) noexcept;
+	    void close();
+	    HttpServer &owner;
+	    std::shared_timed_mutex mx;
+	    bool closed = false;
+	};
+
 	std::vector<std::thread> threads;
 	AsyncProvider asyncProvider;
 	std::optional<SocketServer> socketServer;
-	std::unique_ptr<HttpServerRequest::ILogger> logger;
+	ondra_shared::RefCntPtr<Logger> logger;
 	std::mutex lock;
 	unsigned int iotimeout = 5000;
 

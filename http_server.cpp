@@ -936,14 +936,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 	return false;
 }
 
-class Logger: public HttpServerRequest::ILogger {
-public:
-	Logger(HttpServer &owner):owner(owner) {}
-	virtual void handler_log(const HttpServerRequest &req, LogLevel level, const std::string_view &msg) noexcept;
-	virtual void log(ReqEvent event, const HttpServerRequest &req) noexcept;
-	virtual void error_page(HttpServerRequest &req, int status, const std::string_view &desc) noexcept;
-	HttpServer &owner;
-};
+
 
 void HttpServer::start(NetAddrList listenSockets, unsigned int threads, AsyncProvider a) {
 	if (socketServer.has_value()) return;
@@ -965,7 +958,7 @@ void HttpServer::start(NetAddrList listenSockets, unsigned int threads, AsyncPro
 	}
 	asyncProvider = a;
 
-	logger = std::make_unique<Logger>(*this);
+	logger = new Logger(*this);
 
 
 	a.runAsync([=]{
@@ -1017,6 +1010,7 @@ AsyncProvider HttpServer::getAsyncProvider() {
 
 HttpServer::~HttpServer() {
 	stop();
+	logger->close();
 }
 
 void HttpServer::stop() {
@@ -1061,7 +1055,7 @@ void HttpServer::unhandled() noexcept {
 
 
 void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
-	req->setLogger(logger.get());
+	req->setLogger(PLogger::staticCast(logger));
 	s.read() >> [this, req = std::move(req)](Stream &s, const std::string_view &data) mutable {
 		if (!data.empty()) {
 			s.putBack(data);
@@ -1158,16 +1152,19 @@ void formatToLog(std::vector<char> &log, const double &v) {
 	formatToLog(log, std::to_string(v));
 }
 
-void Logger::handler_log(const HttpServerRequest &req, LogLevel level, const std::string_view &msg) noexcept {
-	owner.log(req, level, msg);
+void HttpServer::Logger::handler_log(const HttpServerRequest &req, LogLevel level, const std::string_view &msg) noexcept {
+    std::shared_lock _(mx);
+	if (!closed) owner.log(req, level, msg);
 }
 
-void Logger::log(ReqEvent event, const HttpServerRequest &req) noexcept {
-	owner.log(event, req);
+void HttpServer::Logger::log(ReqEvent event, const HttpServerRequest &req) noexcept {
+    std::shared_lock _(mx);
+    if (!closed) owner.log(event, req);
 }
 
-void Logger::error_page(HttpServerRequest &req, int status, const std::string_view &desc) noexcept {
-	owner.error_page(req,status,desc);
+void HttpServer::Logger::error_page(HttpServerRequest &req, int status, const std::string_view &desc) noexcept {
+    std::shared_lock _(mx);
+    if (!closed) owner.error_page(req,status,desc);
 }
 
 Stream& HttpServerRequest::getStream() {
@@ -1338,6 +1335,11 @@ bool HttpServerRequest::reserveBodyBuffer(std::size_t maxSize, std::vector<char>
 		}
 	}
 	return true;
+}
+
+void HttpServer::Logger::close() {
+    std::lock_guard _(mx);
+    closed = true;
 }
 
 }

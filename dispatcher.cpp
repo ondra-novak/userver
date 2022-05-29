@@ -46,7 +46,7 @@ Dispatcher::Dispatcher()
 	intr_w = fds[1];
 	waiting.push_back({intr_r,POLLIN,0});
 	next_timeout = std::chrono::system_clock::time_point::max();
-	regs.push_back(Reg(nullptr, next_timeout));
+	regs.push_back(Reg(Callback(), next_timeout));
 #endif
 }
 
