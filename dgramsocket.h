@@ -20,7 +20,7 @@
 namespace userver {
 
 class NetAddr;
-class AsyncResource;
+class SocketResource;
 
 ///Socket to handle sending datagrams
 /**
@@ -100,7 +100,7 @@ protected:
 	std::vector<char> addrBuffer;
 	int rcvsize = 0;
 
-	const AsyncResource &getReadAsync() ;
+	const SocketResource &getReadAsync() ;
 
 };
 template<typename Fn, typename>

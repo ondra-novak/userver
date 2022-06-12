@@ -11,62 +11,57 @@
 #include <mutex>
 #include <queue>
 
-#include "async_resource.h"
 #include "dispatcher.h"
 #include "dispatcher_epoll.h"
 #include "async_provider.h"
 
 namespace userver {
 
+
+
 class AsyncProviderImpl: public IAsyncProvider {
 public:
 
-	using Factory = std::unique_ptr<IDispatcher> (*)();
 
-	AsyncProviderImpl(unsigned int dispcnt, Factory factory);
+	AsyncProviderImpl();
 	virtual void stop() override;
-	virtual void runAsync(const AsyncResource &res,
+	virtual void runAsync(IAsyncResource &&res,
 			IAsyncProvider::Callback &&cb,
 			const std::chrono::system_clock::time_point &timeout) override;
 	virtual bool yield() override;
-	virtual void runAsync(IAsyncProvider::Callback &&cb) override;
+	virtual void runAsync(IAsyncProvider::Action &&cb) override;
 	virtual bool stopped() const override {return _stopped;}
 
 
+	virtual void addDispatcher(PDispatch &&dispatcher) override;
+    virtual std::size_t getDispatchersCount() const override;
+
 protected:
-	using PDispatch = std::unique_ptr<IDispatcher>;
 	std::queue<PDispatch> dispatchers;
 	std::queue<IDispatcher *> dispqueue;
-	std::mutex lock;
+	mutable std::mutex lock;
 	std::condition_variable wt;
 	bool _stopped = false;
+	std::queue<Action> actions;
 
 
 
 };
 
-static std::unique_ptr<IDispatcher> createDispatcher() { return std::make_unique<Dispatcher>(); };
 
-
+AsyncProvider createAsyncProvider(unsigned int dispatchers) {
+    auto prov = std::make_shared<AsyncProviderImpl>();
+    for (unsigned int i = 0; i < dispatchers; i++) {
 #ifdef _WIN32
-AsyncProvider createAsyncProvider(unsigned int dispatchers, AsyncProviderType type) {
-	AsyncProviderImpl::Factory f = &createDispatcher; 
-	return std::make_shared<AsyncProviderImpl>(dispatchers, f);
-}
+        prov->addDispatcher(std::make_unique<Dispatcher>());
 #else
-
-static std::unique_ptr<IDispatcher> createDispatcher_epoll() { return std::make_unique<Dispatcher_EPoll>(); };
-
-AsyncProvider createAsyncProvider(unsigned int dispatchers, AsyncProviderType type) {
-	AsyncProviderImpl::Factory f;
-	switch (type) {
-	default:
-	case AsyncProviderType::poll: f = &createDispatcher;break;
-	case AsyncProviderType::epoll: f = &createDispatcher_epoll;break;
-	}
-	return std::make_shared<AsyncProviderImpl>(dispatchers, f);
-}
+        prov->addDispatcher(std::make_unique<Dispatcher_EPoll>());
 #endif
+    }
+    return prov;
+
+}
+
 
 inline void AsyncProviderImpl::stop() {
 	std::unique_lock _(lock);
@@ -79,65 +74,66 @@ inline void AsyncProviderImpl::stop() {
 	}
 }
 
-inline void AsyncProviderImpl::runAsync(const AsyncResource &res,
+inline void AsyncProviderImpl::runAsync(IAsyncResource &&res,
 		IAsyncProvider::Callback &&cb,
 		const std::chrono::system_clock::time_point &timeout) {
 
 	std::unique_lock _(lock);
-	PDispatch d (std::move(dispatchers.front()));
-	switch (res.op) {
-		case AsyncResource::read: d->waitRead(res.socket, std::move(cb), timeout);break;
-		case AsyncResource::write: d->waitWrite(res.socket, std::move(cb), timeout);break;
+	auto cnt = dispatchers.size();
+	for (decltype(cnt) i = 0; i < cnt; i++) {
+        PDispatch d (std::move(dispatchers.front()));
+        dispatchers.pop();
+        bool ok = d->waitAsync(std::move(res), std::move(cb), timeout);
+        dispatchers.push(std::move(d));
+        if (ok) return;
+
 	}
-	dispatchers.pop();
-	dispatchers.push(std::move(d));
+	throw std::runtime_error(std::string("No dispatcher for the resource:").append(typeid(res).name()));
 }
 
 inline bool AsyncProviderImpl::yield() {
-	rethrowStoredException();
 	IDispatcher *selDisp;
 	std::unique_lock _(lock);
-	wt.wait(_,[&]{
-		return !dispqueue.empty();
-	});
-	selDisp = dispqueue.front();
-	dispqueue.pop();
-	_.unlock();
-	try {
-		auto task = selDisp->getTask();
-		std::unique_lock _(lock);
-		dispqueue.push(selDisp);
-		wt.notify_one();
-		_.unlock();
-		if (task.valid()) {
-			task.cb(task.success);
-			rethrowStoredException();
-			return true;
-		} else {
-			return false;
-		}
-	} catch (...) {
-		_.lock();
-		dispqueue.push(selDisp);
-		wt.notify_one();
-		throw;
+	if (_stopped) return false;
+	if (actions.empty()) {
+        wt.wait(_,[&]{
+            return !dispqueue.empty();
+        });
+        selDisp = dispqueue.front();
+        dispqueue.pop();
+        _.unlock();
+        try {
+            auto task = selDisp->getTask();
+            std::unique_lock _(lock);
+            dispqueue.push(selDisp);
+            wt.notify_one();
+            _.unlock();
+            if (task.valid()) {
+                task.cb(task.success);
+            }
+            return true;
+        } catch (...) {
+            _.lock();
+            dispqueue.push(selDisp);
+            wt.notify_one();
+            throw;
+        }
+	} else {
+	    Action a(std::move(actions.front()));
+	    actions.pop();
+	    _.unlock();
+	    a();
+	    return true;
 	}
 }
 
-inline AsyncProviderImpl::AsyncProviderImpl(unsigned int dispcnt, Factory factory) {
-	for (decltype(dispcnt) i = 0; i < dispcnt; i++) {
-		auto d = factory();
-		dispqueue.push(d.get());
-		dispatchers.push(std::move(d));
-	}
-}
 
-inline void AsyncProviderImpl::runAsync(IAsyncProvider::Callback &&cb) {
+inline AsyncProviderImpl::AsyncProviderImpl() {}
+
+inline void AsyncProviderImpl::runAsync(IAsyncProvider::Action &&cb) {
 	std::unique_lock _(lock);
-	PDispatch d (std::move(dispatchers.front()));
-	d->execAsync(std::move(cb));
-	dispatchers.pop();
-	dispatchers.push(std::move(d));
+	actions.push(std::move(cb));
+	dispatchers.front()->interrupt();
 }
 
 static std::mutex asyncLock;
@@ -225,26 +221,21 @@ void AsyncProvider::stopOnSignal() {
 	}
 }
 
-thread_local std::queue<std::exception_ptr> storedExceptions;
-
-void storeException() {
-	auto e = std::current_exception();
-	if (e != nullptr) {
-		storedExceptions.push(std::move(e));
-		if (storedExceptions.size()>4) storedExceptions.pop();
-	}
-}
-
-void rethrowStoredException() {
-	if (!storedExceptions.empty()) {
-		std::exception_ptr e = std::move(storedExceptions.front());
-		storedExceptions.pop();
-		std::rethrow_exception(e);
-
-	}
-}
 
 
 
 #endif
+
+void AsyncProviderImpl::addDispatcher(PDispatch &&dispatcher) {
+    std::unique_lock _(lock);
+    IDispatcher *p = dispatcher.get();
+    dispatchers.push(std::move(dispatcher));
+    dispqueue.push(p);
+}
+
+std::size_t AsyncProviderImpl::getDispatchersCount() const {
+    std::unique_lock _(lock);
+    return dispatchers.size();
+}
+
 }

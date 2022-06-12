@@ -10,11 +10,11 @@
 #include <sstream>
 
 #include "async_provider.h"
-#include "async_resource.h"
 #include "netaddr.h"
 
 #include "socket.h"
 
+#include "socketresource.h"
 namespace userver {
 
 Socket::Socket() {}
@@ -181,7 +181,7 @@ void Socket::read2(void *buffer, std::size_t size, CallbackT<void(int)> &&fn, bo
 		int err = errno;
 		if (err == EWOULDBLOCK) {
 #endif
-			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::read, s), [this, buffer, size, fn = std::move(fn)](bool succ) mutable {
+			getCurrentAsyncProvider().runAsync(SocketResource(SocketResource::read, s), [this, buffer, size, fn = std::move(fn)](bool succ) mutable {
 				if (!succ) {
 					this->tm = true;
 					fn(0);
@@ -218,7 +218,7 @@ void Socket::write2(const void *buffer, std::size_t size, CallbackT<void(int)> &
 		int err = errno;
 		if (err == EWOULDBLOCK) {
 #endif
-			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::write, s), [this, buffer, size, fn = std::move(fn)](bool succ) mutable {
+			getCurrentAsyncProvider().runAsync(SocketResource(SocketResource::write, s), [this, buffer, size, fn = std::move(fn)](bool succ) mutable {
 				if (!succ) {
 					this->tm = true;
 					fn(0);
@@ -305,7 +305,7 @@ void Socket::waitConnect(int tm, CallbackT<void(bool)> &&cb)  {
 #ifdef _WIN32
 	auto now = std::chrono::system_clock::now();
 	auto checkTime = tm < 0 || tm > 1000 ? now + std::chrono::seconds(1) : now + std::chrono::milliseconds(tm);
-	getCurrentAsyncProvider()->runAsync(AsyncResource(AsyncResource::write, s),
+	getCurrentAsyncProvider()->runAsync(SocketResource(SocketResource::write, s),
 		[this, cb = std::move(cb), tm](bool success) mutable {
 
 		if (!success) {
@@ -330,7 +330,7 @@ void Socket::waitConnect(int tm, CallbackT<void(bool)> &&cb)  {
 	}, checkTime);
 
 #else
-	getCurrentAsyncProvider()->runAsync(AsyncResource(AsyncResource::write, s),
+	getCurrentAsyncProvider()->runAsync(SocketResource(SocketResource::write, s),
 			[this, cb = std::move(cb)](bool success) {
 				cb(success && checkSocketState());
 			}, tm<0?std::chrono::system_clock::time_point::max()

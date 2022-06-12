@@ -14,8 +14,9 @@
 #include <mutex>
 #include <iterator>
 
+#include "socketresource.h"
 #include "async_provider.h"
-#include "async_resource.h"
+#include "socketresource.h"
 
 namespace userver {
 
@@ -145,7 +146,7 @@ bool SocketServer::AsyncAcceptor::asyncAccept(std::shared_ptr<AsyncAcceptor> me,
 	curCallback = std::move(callback);
 	for (SocketHandle i: fds) {
 		if (!isCharged(i)) {
-			ap->runAsync(AsyncResource(AsyncResource::read, i), [me,i](bool){
+			ap->runAsync(SocketResource(SocketResource::read, i), [me,i](bool){
 				std::unique_lock _(me->lk);
 				me->uncharge(i);
 

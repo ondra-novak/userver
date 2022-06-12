@@ -6,10 +6,10 @@
  */
 
 #include "platform.h"
-#include <userver/async_provider.h>
-#include <userver/async_resource.h>
+#include "async_provider.h"
 #include "ssl_socket.h"
 #include "ssl_exception.h"
+#include "socketresource.h"
 
 namespace userver {
 
@@ -40,7 +40,7 @@ SSLSocket::~SSLSocket() {
 			});
 
 		} catch (...) {
-			closeOutput();
+		    SSLSocket::closeOutput();
 		}
 	}
 }
@@ -172,7 +172,7 @@ void SSLSocket::handleStateAsync(int r, int tm, Fn &&fn) {
 				break;
 			case SSL_ERROR_WANT_WRITE:
 				getCurrentAsyncProvider().runAsync(
-						AsyncResource(AsyncResource::write, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool succ) mutable {
+						SocketResource(SocketResource::write, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool succ) mutable {
 								fn(succ?State::retry:State::timeout);
 						},
 						tm<0?std::chrono::system_clock::time_point::max()
@@ -180,7 +180,7 @@ void SSLSocket::handleStateAsync(int r, int tm, Fn &&fn) {
 				);break;
 			case SSL_ERROR_WANT_READ:
 				getCurrentAsyncProvider().runAsync(
-						AsyncResource(AsyncResource::read, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool succ) mutable {
+						SocketResource(SocketResource::read, s.getHandle()), [fn = std::forward<Fn>(fn)] (bool succ) mutable {
 							fn(succ?State::retry:State::timeout);},
 						tm<0?std::chrono::system_clock::time_point::max()
 								:std::chrono::system_clock::now() + std::chrono::milliseconds(tm)
@@ -370,17 +370,17 @@ void SSLSocket::write(const void *buffer, std::size_t size, userver::CallbackT<v
 void SSLSocket::shutdownAsync() {
 	int r = SSL_shutdown(ssl.get());
 	if (r < 0) {
-		AsyncResource::Op op;
+		SocketResource::Op op;
 		SocketHandle h = s.getHandle();
 		int st = SSL_get_error(ssl.get(), r);
 		switch (st) {
-			case SSL_ERROR_WANT_WRITE: op = AsyncResource::write;break;
-			case SSL_ERROR_WANT_READ: op = AsyncResource::read;break;
+			case SSL_ERROR_WANT_WRITE: op = SocketResource::write;break;
+			case SSL_ERROR_WANT_READ: op = SocketResource::read;break;
 			default:
 				connState = ConnState::closed;
 				return;
 		}
-		getCurrentAsyncProvider().runAsync(AsyncResource(op, h),[sock = SSLSocket(std::move(*this))](bool succ) mutable {
+		getCurrentAsyncProvider().runAsync(SocketResource(op, h),[sock = SSLSocket(std::move(*this))](bool succ) mutable {
 			if (succ) sock.shutdownAsync();
 		}, std::chrono::system_clock::now()+std::chrono::seconds(30));
 	} else {

@@ -10,13 +10,30 @@
 #include <functional>
 #include <memory>
 #include "helpers.h"
+#include "idispatcher.h"
 
 #ifndef SRC_MINISERVER_ASYNC_PROVIDER_H_
 #define SRC_MINISERVER_ASYNC_PROVIDER_H_
 
 namespace userver {
 
-class AsyncResource;
+
+///Abstract asynchronous resource
+/**
+ * Resources are tied to dispatchers. Asynchronous provider can handle resource passing
+ * it to the appropriate dispatcher. Types of resources are not directly visible on public
+ * interface because they can be platform depend.
+ *
+ * This also allows to implement own dispatchers and their asynchronous resources
+ */
+class IAsyncResource {
+public:
+    ///just destructor, we use RTTI
+    virtual ~IAsyncResource() {}
+};
+
+
+
 
 class IAsyncProvider {
 public:
@@ -30,20 +47,22 @@ public:
 	 */
 	using Callback = CallbackT<void(bool)>;
 
+
+	using Action = CallbackT<void()>;
 	///run asynchronously
 	/**
 	 * @param res asynchronous resource
 	 * @param cb callback
 	 * @param timeout timeout as absolute point in time. To set "no timeout", use system_clock::time_point::max
 	 */
-	virtual void runAsync(const AsyncResource &res, Callback &&cb,const std::chrono::system_clock::time_point &timeout) = 0;
+	virtual void runAsync(IAsyncResource &&res, Callback &&cb,const std::chrono::system_clock::time_point &timeout) = 0;
 	///Run asynchronously
 	/**
 	 * @param cb callback to run - it is executed with argument true
 	 *
 	 * Useful to move execution to different thread
 	 */
-	virtual void runAsync(Callback &&cb) = 0;
+	virtual void runAsync(Action &&cb) = 0;
 
 	///yield execution in favor to process single asynchronou task and exit
 	/**
@@ -58,7 +77,22 @@ public:
 	///Returns true, if async provider has been stopped
 	virtual bool stopped() const = 0;
 
+
+	///Add dispatcher to the provider
+	/**
+	 * @param dispatcher pointer to dispatcher
+	 *
+	 * @note You cannot remove dispatchers. If you need to change dispatchers,
+	 * you need to recreate the whole provider
+	 */
+	virtual void addDispatcher(PDispatch &&dispatcher) = 0;
+
+	///Retrieve current count of dispatchers.
+	virtual std::size_t getDispatchersCount() const = 0;
+
 	virtual ~IAsyncProvider() {}
+
+
 
 
 };
@@ -99,14 +133,21 @@ public:
 		while (yield());
 	}
 
+	///Execute function when asynchronous resource becomes signaled. You can specify timeout
+	/**
+	 * @param res asynchronous resource monitored
+	 * @param fn function
+	 * @param timeout
+	 */
 	template<typename Fn>
-	void runAsync(const AsyncResource &res, Fn &&fn, const std::chrono::system_clock::time_point &timeout)  {
-		get()->runAsync(res, IAsyncProvider::Callback(std::forward<Fn>(fn)), timeout);
+	void runAsync(IAsyncResource &&res, Fn &&fn, const std::chrono::system_clock::time_point &timeout)  {
+		get()->runAsync(std::move(res), IAsyncProvider::Callback(std::forward<Fn>(fn)), timeout);
 	}
 
+	///Execute function asynchronously in context of provider's thread
 	template<typename Fn>
 	void runAsync(Fn &&fn) {
-		get()->runAsync([fn = std::forward<Fn>(fn)](bool) mutable {fn();});
+		get()->runAsync(std::forward<Fn>(fn));
 	}
 
 	bool stopped() const {
@@ -119,15 +160,13 @@ public:
 	*/
 	void stopOnSignal();
 
+	///stop asynchronous provider
 	void stop() {
 		return get()->stop();
 	}
 };
 
-enum class AsyncProviderType {
-	poll,
-	epoll
-};
+
 
 ///Create asynchronous provider with specified dispatchers
 /**
@@ -136,7 +175,7 @@ enum class AsyncProviderType {
  *
  * @note you need to create thread and call start_thread for each thread.
  */
-AsyncProvider createAsyncProvider(unsigned int dispatchers = 1, AsyncProviderType type = AsyncProviderType::epoll);
+AsyncProvider createAsyncProvider(unsigned int dispatchers = 1);
 
 void setCurrentAsyncProvider(AsyncProvider aprovider);
 
@@ -146,13 +185,6 @@ AsyncProvider getCurrentAsyncProvider();
 
 std::optional<AsyncProvider> getCurrentAsyncProvider_NoException();
 
-///Store current exception - can be rethrow later
-/** useful to store exceptions caught in destructor */
-void storeException();
-
-///Rethrows stored exception
-/** rethrows any stored exception */
-void rethrowStoredException();
 
 
 }

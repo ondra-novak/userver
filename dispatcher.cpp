@@ -7,13 +7,13 @@
 
 #include "platform.h"
 #include "dispatcher.h"
-
+#include "socketresource.h"
 #include <fcntl.h>
 
 namespace userver {
 
 Dispatcher::Dispatcher()
-:stopped(false)
+:stopped(false),intr(false)
 {
 #ifdef _WIN32
 	intr_r = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -59,6 +59,20 @@ Dispatcher::~Dispatcher() {
 #endif
 }
 
+bool Dispatcher::waitAsync(IAsyncResource &&resource,  Callback &&cb, std::chrono::system_clock::time_point timeout) {
+    if (typeid(resource) == typeid(SocketResource)) {
+       const SocketResource &res = static_cast<const SocketResource &>(resource);
+       switch (res.op) {
+           default:
+           case SocketResource::read: waitRead(res.socket, std::move(cb), timeout);break;
+           case SocketResource::write: waitWrite(res.socket, std::move(cb), timeout);break;
+       }
+       return true;
+    } else {
+       return false;
+    }
+
+}
 
 void Dispatcher::waitRead(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) {
 	waitEvent(POLLIN, socket, std::move(cb), timeout);
@@ -68,8 +82,10 @@ void Dispatcher::waitWrite(SocketHandle socket, Callback &&cb, std::chrono::syst
 	waitEvent(POLLOUT, socket, std::move(cb), timeout);
 }
 
-void Dispatcher::execAsync(Callback &&cb) {
-	waitEvent(0, intr_r, std::move(cb), std::chrono::system_clock::time_point::min());
+void Dispatcher::interrupt() {
+    if (!intr.exchange(true))  {
+        notify();
+    }
 }
 
 void Dispatcher::notify() {
@@ -122,8 +138,8 @@ void Dispatcher::removeItem(std::size_t idx) {
 }
 
 Dispatcher::Task Dispatcher::getTask() {
-	if (stopped) return Task();
-	while (true) {
+    if (stopped) return Task();
+	while (!intr.exchange(false)) {
 		auto now = std::chrono::system_clock::now();
 		if (lastIdx >= waiting.size()) {
 			int wait_tm;
@@ -200,6 +216,7 @@ Dispatcher::Task Dispatcher::getTask() {
 			}
 		}
 	}
+	return Task();
 }
 
 Dispatcher::Reg::Reg(Callback &&cb, std::chrono::system_clock::time_point timeout)
