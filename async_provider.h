@@ -64,12 +64,19 @@ public:
 	 */
 	virtual void runAsync(Action &&cb) = 0;
 
-	///yield execution in favor to process single asynchronou task and exit
+
+	///Run as worker
 	/**
-	 * @retval true success
-	 * @retval false asynchronous provider has been stopped (probably is being destroyed)
+	 * Converts this thread to a worker which helps to manage dispatchers and tasks. Function
+	 * returns after single task is carried on or after the asynchronous provider is stopped
+	 *
+	 * @retval true there is work to do, you can call the function again
+	 * @retval false async provider has been stopped, do not call the function again
+	 *
+	 * @note function blocks current thread
 	 */
-	virtual bool yield() = 0;
+	virtual bool worker() = 0;
+
 
 	///Stops async provider - for example if you need to exit server
 	virtual void stop() = 0;
@@ -107,8 +114,8 @@ public:
 	 * @retval true success
 	 * @retval false asynchronous provider has been stopped (probably is being destroyed)
 	 */
-	bool yield() {
-		return get()->yield();
+	bool worker() {
+		return get()->worker();
 	}
 
 	///Yield execution until condition is met
@@ -118,20 +125,42 @@ public:
 	 * @retval false asynchronous provider has been stopped (probably is being destroyed)
 	 */
 	template<typename Pred>
-	auto yield_until(Pred &&pred) -> decltype(!pred()) {
+	auto workUntil(Pred &&pred) -> decltype(!pred()) {
 		while (!pred()) {
-			if (!yield()) return false;
+			if (!worker()) return false;
 		}
 		return true;
 	}
 
-	///Runs thread to execute asynchronous tasks, returns when asynchronous provider is stopped
-	/** Note - any exception thrown during processing are thrown out of this function. You
-	 * need to catch exceptions and process them and eventually call this function again
+	///Runs current thread as worker
+	/**
+	 * Function call worker() in cycle until the provider is stopped.
+	 *
+	 * @note Function can throw exception. Exception can be rethrow from other thread which is unable
+	 * to throw exception
 	 */
-	void start_thread() {
-		while (yield());
-	}
+	void runAsWorker();
+
+    ///Adds thread to the provider
+    /**
+     * Function exits immediately and new thread is started at background
+     *
+     * @note this thread doesn't handle exceptions. Exceptions are stored and pickup by thread
+     * which is able to throw exception
+     *
+     * @note if you need to remove thread, you must do it from inside through runAsync(). See stopThread()
+     */
+	void addThread();
+
+    ///Signals to this thread to exit.
+    /**
+     * You can signal to thread which was create by addThread(). Otherwise, function fails
+     * and returns false as result
+     *
+     * @retval true signal accepted. Thread will be terminated after finish its work
+     * @retval false failure, this thread cannot be signaled.
+     */
+	static bool stopThread();
 
 	///Execute function when asynchronous resource becomes signaled. You can specify timeout
 	/**
@@ -167,15 +196,55 @@ public:
 };
 
 
+class NoDispatcherForTheResourceException: public std::exception {
+public:
+
+    NoDispatcherForTheResourceException(const std::type_info &type):type(type) {}
+    const std::type_info &getType() const {return type;}
+    const char *what() const noexcept override;
+    template<typename T>
+    bool isType() const {return type == typeid(T);}
+protected:
+    mutable std::string message;
+    const std::type_info &type;
+};
+
+class NoAsynProviderIsActiveException: public std::exception {
+public:
+    const char *what() const noexcept override;
+};
+
+
+///Configuration for asynchronous provider
+struct AsyncProviderConfig {
+    ///count of socket dispatchers
+    int socket_dispatchers = 1;
+    ///count of threads
+    /** Default value is zero as in most cases, you want to have creation of threads under your
+     * control. This means, you have to create own threads and each thread must call AsyncProvider::start_thread()
+     *
+     * Note that HttpServer expects this value filled in if the configuration is used to start the server.
+     * In this case, the HttpServer uses the value only as parameter, but inicializes
+     * the dispatcher with zero threads and then creates own set of threads
+     */
+    int threads = 0;
+    ///force to use poll (default is epoll), for Windows WSAPoll is always used
+    bool use_poll = false;
+    ///install scheduler
+    /** Scheduler needs extra thread. It is default false for compatibilty reason. You need
+     * to enable scheduler to use At and After classes
+     */
+    bool scheduler = false;
+
+};
+
 
 ///Create asynchronous provider with specified dispatchers
 /**
- * @param dispatchers count of active dispatchers. You will need at least this count of threads.
+ * @param cfg conifguration
  * @return asynchronous provider
- *
- * @note you need to create thread and call start_thread for each thread.
  */
-AsyncProvider createAsyncProvider(unsigned int dispatchers = 1);
+AsyncProvider createAsyncProvider(const AsyncProviderConfig &cfg);
 
 void setCurrentAsyncProvider(AsyncProvider aprovider);
 
@@ -184,6 +253,7 @@ void setThreadAsyncProvider(AsyncProvider aprovider);
 AsyncProvider getCurrentAsyncProvider();
 
 std::optional<AsyncProvider> getCurrentAsyncProvider_NoException();
+
 
 
 

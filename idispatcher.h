@@ -8,6 +8,7 @@
 #ifndef SRC_USERVER_IDISPATCHER_H_
 #define SRC_USERVER_IDISPATCHER_H_
 
+#include <chrono>
 #include "helpers.h"
 
 namespace userver {

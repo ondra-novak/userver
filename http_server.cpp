@@ -938,28 +938,14 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 
 
 
-void HttpServer::start(NetAddrList listenSockets, unsigned int threads, AsyncProvider a) {
+void HttpServer::start(NetAddrList listenSockets, AsyncProvider a) {
 	if (socketServer.has_value()) return;
 
 	socketServer.emplace(listenSockets);
 
-	for (unsigned int i = 0; i < threads; i++) {
-		this->threads.emplace_back([a, this]() mutable {
-			setThreadAsyncProvider(a);
-			while (true) {
-				try {
-					a.start_thread();
-					return;
-				} catch (...) {
-					unhandled();
-				}
-			}
-		});
-	}
 	asyncProvider = a;
 
 	logger = new Logger(*this);
-
 
 	a.runAsync([=]{
 		listen();
@@ -968,10 +954,10 @@ void HttpServer::start(NetAddrList listenSockets, unsigned int threads, AsyncPro
 }
 
 
-void HttpServer::start(NetAddrList listenSockets, unsigned int threads, unsigned int dispatchers) {
+void HttpServer::start(NetAddrList listenSockets, const AsyncProviderConfig &cfg) {
 	if (socketServer.has_value()) return;
 
-	start(listenSockets, threads, createAsyncProvider(dispatchers));
+	start(listenSockets, createAsyncProvider(cfg));
 }
 
 void HttpServer::listen() {
@@ -991,12 +977,10 @@ void HttpServer::listen() {
 
 
 
-void HttpServer::addThread() {
-	setThreadAsyncProvider(asyncProvider);
+void HttpServer::runAsWorker() {
 	while (true) {
 		try {
-			asyncProvider.start_thread();
-			setThreadAsyncProvider(nullptr);
+			asyncProvider.runAsWorker();
 			return;
 		} catch (...) {
 			unhandled();

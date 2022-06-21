@@ -425,14 +425,30 @@ public:
 
 	///Start the server
 	/**
+	 *
+	 *
 	 * @param listenSockets list of addresses to listen
-	 * @param threads count of threads processing the requests. When 0 is passed, then no threads are created,
-	 * but you can add threads manually by addThread()
-	 * @param dispatchers count of dispatchers, which monitors pending connections. Must be less or equal to threads
+	 * @param cfg configuration of root asynchronous provider. This function creates asynchronous provider
+	 * associated with the server. You should register this asynchronous provider with current thread
+	 *  or all other threads created before the call to allow to use asynchronous function
+	 *
+	 * @see getAsyncProvider
+	 *
+	 * @note configuration should have 'thread' also filled otherwise no threads are created
+	 *
+	 *
 	 */
-	void start(NetAddrList listenSockets, unsigned int threads, unsigned int dispatchers = 1);
+	void start(NetAddrList listenSockets, const AsyncProviderConfig &cfg);
 
-	void start(NetAddrList listenSockets, unsigned int threads, AsyncProvider asyncProvider);
+	///Start the server using existing async provider
+	/**
+	 * @param listenSockets list of addresses to listen
+	 * @param asyncProvider existing asynchronous provider. The instance should contain no running
+	 * threads as the server can create own threads which can also handle exceptions and pass
+	 * them to the logger. If you want to use own threads, set the field 'threads' to zero
+	 *
+	 */
+	void start(NetAddrList listenSockets, AsyncProvider asyncProvider);
 ///Stop the server
 	/**
 	 * Function joins all threads, will block until the operation completes
@@ -440,6 +456,8 @@ public:
 	 * operations are canceled. If there are associated data, they should be stored in
 	 * callbacks' clousures, because they are deleted as expected, so these data can be disposed in
 	 * this time.
+	 *
+	 * @note Function sets associated asynchronous provider to stop state
 	 */
 	void stop();
 
@@ -456,11 +474,14 @@ public:
 	 */
 	void stopOnSignal();
 
-	///Add thread to pool
-	/** Thread which called this function becomes the pool thread. Note that thread is not joined
-	 * during stop
+	///Executes current thread as worker
+	/**
+	 * Mostly called by main thread to use its power as worker. It also handles all exceptions,
+	 * which causes calling of unhandled() function.
+	 *
+	 * Function exits, when asynchronous provider is stopped
 	 */
-	void addThread();
+	void runAsWorker();
 
 	///Receive asynchronous provider
 	AsyncProvider getAsyncProvider();

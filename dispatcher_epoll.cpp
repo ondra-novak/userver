@@ -130,7 +130,7 @@ void Dispatcher_EPoll::notify() {
 }
 
 Dispatcher_EPoll::Task Dispatcher_EPoll::getTask() {
-	while (!stopped.load()) {
+	if (!stopped.load()) {
 		int r;
 		std::unique_lock mx(lock, std::defer_lock);
 		epoll_event ev;

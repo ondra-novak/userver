@@ -17,6 +17,7 @@ set(userver_sources 	netaddr.cpp
 	openapi.cpp
 	websockets_parser.cpp
 	mtwritestream.cpp
+	scheduler_impl.cpp
 )
 
 if(NOT DEFINED USERVER_NO_SSL)

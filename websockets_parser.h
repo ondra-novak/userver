@@ -37,7 +37,7 @@ public:
 };
 
 enum class WSFrameType {
-	///Unkown frame - this state is never returned, howver it used to initialize variables
+	///Unkown frame - this state is never returned, however it used to initialize variables
 	unknown = 0,
 	///frame is not complete yet
 	/** If incomplete received through recv(), it can mean, that remote stream
