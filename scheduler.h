@@ -11,8 +11,14 @@
 
 namespace userver {
 
+using ScheduledTaskID = std::size_t;
+
 class SchedulerAsyncResource: public IAsyncResource {
 public:
+    SchedulerAsyncResource(ScheduledTaskID id):id(id) {}
+
+
+    ScheduledTaskID id;
 };
 
 
@@ -38,17 +44,27 @@ public:
  */
 class At {
 public:
-    At(const std::chrono::system_clock::time_point &tp):tp(tp) {}
+    At(const std::chrono::system_clock::time_point &tp):tp(tp),id(++glob_id) {}
+    At(const std::chrono::system_clock::time_point &tp, ScheduledTaskID id):tp(tp),id(id) {}
     template<typename Fn>
     At &operator>>(Fn &&fn) {
         AsyncProvider a = getCurrentAsyncProvider();
-        a->runAsync(SchedulerAsyncResource(), [fn = std::forward<Fn>(fn)](bool){
+        a->runAsync(SchedulerAsyncResource(id), [fn = std::forward<Fn>(fn)](bool){
             fn();
         }, tp);
         return *this;
     }
+    ScheduledTaskID get_id() const {return id;}
+
+    void cancel() {
+        AsyncProvider a = getCurrentAsyncProvider();
+        a->stopWait(SchedulerAsyncResource(id), false);
+    }
+
 protected:
     std::chrono::system_clock::time_point tp;
+    ScheduledTaskID id;
+    static std::atomic<ScheduledTaskID> glob_id;
 
     void installScheduler(AsyncProvider &a);
 };

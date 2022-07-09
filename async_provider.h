@@ -96,6 +96,27 @@ public:
 
 	///Retrieve current count of dispatchers.
 	virtual std::size_t getDispatchersCount() const = 0;
+    ///Stops asynchronous waiting
+    /**
+     * @param resource description of asynchronous resource to stop waiting. The type
+     * and content of the description depends on type of the asynchronous resource. Not
+     * all resources are supported
+     * @param signal_timeout set true to execute associated callback and passing timeout signal
+     * to it. Set this to false to drop waiting without calling the callback
+     *
+     * @retval true successfully done
+     * @retval false resource was not found.
+     *
+     * @note The operation can be executed asynchronously. Then the return value true
+     * indicates, that operation successfully started. There is currently no way to
+     * determine, whether the operation is running synchronous or asynchronous.
+     * In synchronous mode, the current thread can be used to execute the callback associated
+     * with the resource
+     *
+     * @note The function returns false if the operation is not supported for the given
+     * resource.
+     */
+    virtual bool stopWait(IAsyncResource &&resource, bool signal_timeout) = 0;
 
 	virtual ~IAsyncProvider() {}
 

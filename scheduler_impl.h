@@ -26,6 +26,7 @@ public:
     virtual IDispatcher::Task getTask() override;
     virtual void interrupt() override;
     virtual void stop() override;
+    virtual Callback stopWait(IAsyncResource &&resource) override;
 
 
 protected:
@@ -33,6 +34,7 @@ protected:
     Task commit(const std::chrono::system_clock::time_point &now);
 
     struct SchTask {
+        ScheduledTaskID id;
         std::chrono::system_clock::time_point tp;
         IDispatcher::Callback cb;
     };

@@ -46,6 +46,7 @@ public:
 	virtual bool stopped() const override {return _stopped;}
 	virtual void addDispatcher(PDispatch &&dispatcher) override;
     virtual std::size_t getDispatchersCount() const override;
+    virtual bool stopWait( IAsyncResource &&resource, bool signal_timeout) override;
 
 protected:
 	std::queue<PDispatch> dispatchers;
@@ -108,6 +109,25 @@ inline void AsyncProviderImpl::runAsync(IAsyncResource &&res,
 
 	}
 	throw NoDispatcherForTheResourceException(typeid(res));
+}
+
+inline bool AsyncProviderImpl::stopWait(IAsyncResource &&resource, bool signal_timeout) {
+    std::unique_lock _(lock);
+    auto cnt = dispatchers.size();
+    for (decltype(cnt) i = 0; i < cnt; i++) {
+        PDispatch d (std::move(dispatchers.front()));
+        dispatchers.pop();
+        Callback cb =  d->stopWait(std::move(resource));
+        dispatchers.push(std::move(d));
+        if (cb != nullptr) {
+            _.unlock();
+            if (signal_timeout) cb(false);
+            return true;
+        }
+
+    }
+    return false;
+
 }
 
 void AsyncProviderImpl::handleException() {

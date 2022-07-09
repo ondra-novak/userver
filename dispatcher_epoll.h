@@ -32,6 +32,7 @@ public:
     virtual Task getTask() override;
 	virtual void interrupt() override;
 	virtual void stop() override;
+	virtual Callback stopWait(IAsyncResource &&resource) override;
 
 
 protected:
@@ -83,6 +84,7 @@ protected:
 	void rearm_fd(bool first_call, int socket, RegList &lst);
 	int getWaitTime() const;
 	int getTmFd() const;
+	Callback disarm(Op op, int socket);
 };
 
 }

@@ -35,6 +35,7 @@ public:
 	virtual void interrupt() override;
 	virtual Task getTask() override;
 	virtual void stop() override;
+	virtual Callback stopWait(IAsyncResource &&resource) override;
 
 protected:
 
@@ -46,6 +47,7 @@ protected:
 	};
 
 	void waitEvent(int event, SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout);
+	Callback disarmEvent(int event, SocketHandle socket);
 	void removeItem(std::size_t idx);
 	void notify();
 	std::mutex lk;

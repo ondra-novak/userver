@@ -375,5 +375,13 @@ void Socket::clearTimeout() {
 	tm = false;
 }
 
+bool Socket::cancelAsyncRead(bool set_timeouted) {
+    return getCurrentAsyncProvider()->stopWait(SocketResource(SocketResource::read, s), set_timeouted);
+}
+
+bool Socket::cancelAsyncWrite(bool set_timeouted) {
+    return getCurrentAsyncProvider()->stopWait(SocketResource(SocketResource::write, s), set_timeouted);
+}
+
 
 }

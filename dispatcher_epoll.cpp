@@ -253,6 +253,35 @@ int Dispatcher_EPoll::getTmFd() const {
 	return iter->second;
 }
 
+Dispatcher_EPoll::Callback Dispatcher_EPoll::stopWait(IAsyncResource &&resource) {
+    if (typeid(resource) == typeid(SocketResource)) {
+          const SocketResource &res = static_cast<const SocketResource &>(resource);
+          switch (res.op) {
+              case SocketResource::read: return disarm(Op::read, res.socket);break;
+              case SocketResource::write: disarm(Op::write, res.socket);break;
+          }
+    }
+    return Callback();
+}
+
+Dispatcher_EPoll::Callback Dispatcher_EPoll::disarm(Op op, int socket) {
+    std::lock_guard _(lock);
+    auto iter = fd_map.find(socket);
+    if (iter != fd_map.end()) {
+        auto iter2 = std::find_if(iter->second.begin(), iter->second.end(), [&](const Reg &r) {
+           return r.op == op;
+        });
+        if (iter2 != iter->second.end()) {
+            iter2->timeout = std::chrono::system_clock::now();
+            Callback cb ( std::move(iter2->cb));
+            notify();
+            return cb;
+
+        }
+    }
+    return Callback();
+}
+
 }
 
 #endif

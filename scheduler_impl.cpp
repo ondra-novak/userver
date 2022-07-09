@@ -15,8 +15,9 @@ namespace userver {
 bool SchedulerDispatcher::waitAsync(IAsyncResource &&resource, IDispatcher::Callback &&cb,
         std::chrono::system_clock::time_point timeout) {
     if (typeid(resource) == typeid(SchedulerAsyncResource)) {
+        SchedulerAsyncResource &res = static_cast<SchedulerAsyncResource &>(resource);
         std::unique_lock _(mx);
-        queue.push(SchTask{timeout,std::move(cb)});
+        queue.push(SchTask{res.id, timeout,std::move(cb)});
         intr = true;
         cond.notify_one();
         return true;
@@ -53,6 +54,25 @@ void SchedulerDispatcher::stop() {
     intr = true;
     stopped = true;
     cond.notify_one();
+}
+
+SchedulerDispatcher::Callback SchedulerDispatcher::stopWait(IAsyncResource &&resource) {
+    Callback to_call;
+    if (typeid(resource) == typeid(SchedulerAsyncResource)) {
+        SchedulerAsyncResource &res = static_cast<SchedulerAsyncResource &>(resource);
+        std::unique_lock _(mx);
+        Queue q (std::move(queue));
+        while (!q.empty()) {
+            SchTask &t = const_cast<SchTask &>(q.top());
+            if (t.id != res.id) {
+                queue.push(std::move(t));
+            } else {
+                to_call = std::move(t.cb);
+            }
+            q.pop();
+        }
+    }
+    return to_call;
 }
 
 SchedulerDispatcher::Task SchedulerDispatcher::commit(const std::chrono::system_clock::time_point &now) {

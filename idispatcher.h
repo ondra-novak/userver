@@ -99,6 +99,14 @@ public:
      */
 	virtual void stop() = 0;
 
+	///Stops asynchronous waiting
+	/**
+	 * @param resource asynchronous resource to stop (unblock)
+	 * @return valid task, if the operation has been stopped, the task contains callback
+	 * which can be called
+	 */
+	virtual Callback stopWait(IAsyncResource &&resource) = 0;
+
 	virtual ~IDispatcher() {}
 };
 

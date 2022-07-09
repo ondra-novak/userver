@@ -399,4 +399,12 @@ void SSLSocket::clearTimeout() {
 	s.clearTimeout();
 }
 
+bool SSLSocket::cancelAsyncRead(bool set_timeouted) {
+    return s.cancelAsyncRead(set_timeouted);
+}
+
+bool SSLSocket::cancelAsyncWrite(bool set_timeouted) {
+    return s.cancelAsyncWrite(set_timeouted);
+}
+
 }
