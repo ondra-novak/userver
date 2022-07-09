@@ -261,6 +261,149 @@ public:
     int get_read_timeout() const {return (*this)->get_read_timeout();}
     int get_write_timeout() const {return (*this)->get_write_timeout();}
 
+
+    class ReadHelper {
+    public:
+        operator std::string_view() {
+            auto out = _owner->read_sync();
+            _owner = nullptr;
+            return out;
+        }
+        template<typename Fn>
+        void operator>>(Fn &&fn) {
+            _owner->read_async(std::forward<Fn>(fn));
+            _owner = nullptr;
+        }
+
+    protected:
+        Stream2_t *_owner;
+        ReadHelper(Stream2_t *owner):_owner(owner) {}
+        ReadHelper(const ReadHelper &other) = delete;
+        ReadHelper &operator=(const ReadHelper &other) = delete;
+        friend class Stream2_t;
+    };
+
+    class WriteHelper {
+    public:
+        operator bool() {
+            bool x = _owner->write_sync(_buffer);
+            _owner = nullptr;
+            return x;
+        }
+        template<typename Fn>
+        void operator>>(Fn &&fn) {
+            _owner->write_async(_buffer, _copy_content, std::forward<Fn>(fn));
+            _owner = nullptr;
+        }
+        ~WriteHelper() {
+            if (_owner) _owner->write_sync(_buffer);
+        }
+    protected:
+        Stream2_t *_owner;
+        std::string_view _buffer;
+        bool _copy_content;
+        WriteHelper(Stream2_t *owner, const std::string_view &buffer, bool copy_content)
+            :_owner(owner)
+            ,_buffer(buffer)
+            ,_copy_content(copy_content) {}
+        WriteHelper(const WriteHelper &other) = delete;
+        WriteHelper &operator=(const WriteHelper &other) = delete;
+        friend class Stream2_t;
+    };
+
+
+
+    class FlushHelper {
+    public:
+        operator bool() {
+            auto out = _owner->flush_sync();
+            _owner = nullptr;
+            return out;
+        }
+        template<typename Fn>
+        void operator>>(Fn &&fn) {
+            _owner->flush_async(std::forward<Fn>(fn));
+            _owner = nullptr;
+        }
+        ~FlushHelper() {
+            if (_owner) _owner->flush_sync();
+        }
+
+    protected:
+        Stream2_t *_owner;
+        FlushHelper(Stream2_t *owner):_owner(owner) {}
+        FlushHelper(const FlushHelper &other) = delete;
+        FlushHelper &operator=(const FlushHelper &other) = delete;
+        friend class Stream2_t;
+    };
+
+
+    ///Generic read, you can choose between sync and async version by use
+    /**
+     * @return object can be converted to std::string_view which executes synchronous read.
+     * You can also use operator >> to forward reading to completion function which executes
+     * asynchronous read
+     *
+     * @code
+     * std::string_view data = stream.read();
+     *
+     * stream.read() >> [=](std::string_view data) {
+     *    ...
+     * };
+     * @endcode
+     */
+    ReadHelper read() {return ReadHelper(this);}
+    ///Generic write, you can choose between sync and async version by use
+    /**
+     * @param buffer buffer to write
+     * @param copy_content se true to copy content, false to skip copying - little faster. This
+     * doesn't effect on synchronous writing
+     *
+     * @return object can be converted to bool which executes synchronous write.
+     * You can also use operator >> to forward reading to completion function which executes
+     * asynchronous read. If none used, synchronous write is finally executed.
+     *
+     * @code
+     *
+     * stream.write(data);
+     *
+     * bool ok = stream.write(data);
+     *
+     * stream.write(data) >> [=](bool ok) {
+     *    ...
+     * };
+     *
+     * stream.write(data) >> nullptr;
+     * @endcode
+     */
+    WriteHelper write(const std::string_view &buffer, bool copy_content = true) {
+        return WriteHelper(this, buffer, copy_content);
+    }
+    ///Generic flush, you can choose between sync and async version by use
+    /**
+     * @return object can be converted to bool which executes synchronous flush.
+     * You can also use operator >> to forward reading to completion function which executes
+     * asynchronous flush. If none used, synchronous write is finally executed.
+     *
+     * @code
+     *
+     * stream.flush(); //synchronous
+     *
+     * bool ok = stream.flush(); //synchronous
+     *
+     * stream.flush() >> [=](bool ok) { //asynchronous
+     *    ...
+     * };
+     *
+     * stream.flush() >> nullptr;   //asynchronous
+     * @endcode
+     */
+    FlushHelper flush() {return FlushHelper(this);}
+
+
+
+
+
 };
 
 using Stream2 = Stream2_t<std::unique_ptr>;
