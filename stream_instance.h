@@ -8,7 +8,9 @@
 #ifndef SRC_LIBS_USERVER_STREAM_INSTANCE_H_
 #define SRC_LIBS_USERVER_STREAM_INSTANCE_H_
 
-#include "stream2.h"
+#include <userver/stream.h>
+
+#include <future>
 
 namespace userver {
 
@@ -19,8 +21,12 @@ public:
     template<typename ... Args>
     StreamInstance(Args &&... args) {
         new(&_buffer) T(std::forward<Args>(args)...);
+        //special flag stops deleting on statically allocated object
+        _first_line.next = &_first_line;
     }
 
+    StreamInstance(const StreamInstance &other) = delete;
+    StreamInstance &operator=(const StreamInstance &other) = delete;
 
 
     T *operator->() {return getContent();}
@@ -28,6 +34,7 @@ public:
 
 
 
+    virtual ~StreamInstance();
 protected:  //content
 
     T *getContent() {return reinterpret_cast<T *>(_buffer);}
@@ -104,9 +111,15 @@ protected:  //write part
         std::vector<char> buffer;
         Callback<void(bool)> cb;
         Line *next = nullptr;
+
+        ~Line() {
+            //next->next == next - marks statically allocated object (tail)
+            if (next && next->next != next) delete next;
+        }
     };
 
     std::atomic<Line *> _cur_line = std::atomic<Line *>(nullptr);
+    std::atomic<bool> _async_write_closed = std::atomic<bool>(false);
 
     Line _first_line;
 
@@ -165,8 +178,11 @@ protected:  //write part
         if (_first_line.data.empty()) {
             _first_line.data = std::string_view("",1); //just dummy settings
             finish_write_first_line(1); //send 1 to avoid error
+        } else if (_async_write_closed.load()) {
+            finish_write_first_line(0); //send 0 as timeout
         } else {
             getContent()->write(_first_line.data.data(), _first_line.data.size(),[this](int r){
+                update_flush_size(r, _first_line.data.size());
                 finish_write_first_line(r);
             });
         }
@@ -177,7 +193,7 @@ protected:  //write part
         bool ok = false;
         if (c) {
             _first_line.data = _first_line.data.substr(c);
-            if (!_first_line.buffer.empty()) {
+            if (!_first_line.data.empty()) {
                 write_async_lines();
                 return;
             } else {
@@ -201,7 +217,7 @@ protected:  //write part
             //t contains current list, and _cur_line is reset
             //we need to reverse it
             Line *rt = nullptr;
-            while (t) {
+            while (t && t != &_first_line) {
                 //store next
                 Line *x = t->next;
                 //set next to rt
@@ -211,66 +227,51 @@ protected:  //write part
                 //restore t to continue
                 t = x;
             }
-            //now, we will use _first_line.next to store our queue
-            _first_line.next = rt;
-            //next is initialized, now we conditinue to send rest of the list
-            write_async_lines_next(true);
-            //still locked here
+            write_async_chain_lines(std::unique_ptr<Line>(rt));
         }
     }
 
 
-    void write_async_lines_next(bool st) noexcept {
-        //still locked
-        //data in queue are empty
-        auto ln = _first_line.next;
+    void write_async_chain_lines(std::unique_ptr<Line> &&ln) {
         if (ln == nullptr) {
-            //when there is no lines to send - unlock and exit (note unlock can repeat the process)
             write_async_lines_unlock();
-
-        } else if (!st) {
-            //when error reported, discard all lines
-            while (ln) {
-                ln->cb(false);
-                auto x = ln;
-                ln = ln->next;
-                delete x;
-            }
-            //reset
-            _first_line.next = nullptr;
-            //unlock
-            write_async_lines_unlock();
-
-        } else if (ln->data.empty()) {
-            //when whole data has been sent
-            auto cb = std::move(ln->cb);
-            auto nx = ln->next;
-            //delete line
-            delete ln;
-            //set next line
-            _first_line.next = nx;
-            //execute callback
-            if (cb!=nullptr) cb(st);
-            //send next line
-            write_async_lines_next(st);
-
         } else {
-            //send line data
-            getContent()->write(ln->data.data(), ln->data.size(), [this](int r){
-               //if something sent
-               if (r) {
-                   //remove sent content
-                   auto ln = _first_line.next;
-                   ln->data = ln->data.substr(r);
-                   //repeat send
-                   write_async_lines_next(true);
-               } else {
-                   //if error, just finish
-                   write_async_lines_next(false);
-               }
-            });
+            const void *d = ln->data.data();
+            std::size_t sz = ln->data.size();
+            if (sz && !_async_write_closed.load()) {
+                getContent()->write(d,sz,[=, ln= std::move(ln)](int r) mutable {
+                    if (r) {
+                        ln->data = ln->data.substr(r);
+                        if (ln->data.empty()) {
+                          if (ln->cb != nullptr) {
+                              ln->cb(true);
+                          }
+                          Line *n = ln->next;
+                          ln->next = nullptr;
+                          ln = std::unique_ptr<Line>(n);
+                        }
+                        write_async_chain_lines(std::move(ln));
+                    } else {
+                        auto c = ln.get();
+                        while (c) {
+                            if (c->cb != nullptr) {
+                                c->cb(false);
+                            }
+                            c = c->next;
+                        }
+                    }
+                });
+            } else {
+                if (ln->cb!= nullptr) {
+                    ln->cb(!_async_write_closed.load());
+                }
+                Line *n = ln->next;
+                ln->next = nullptr;
+                write_async_chain_lines(std::unique_ptr<Line>(n));
+            }
         }
     }
+
 
     virtual void close_output() {
         write_async(std::string_view(), false, [this](bool) {
@@ -287,12 +288,16 @@ protected:  //write part
 protected:  //character part
 
     std::vector<char> _chr_buffer;
+    std::size_t flush_size_advice = 0;
+    std::size_t flush_count = 0;
 
-    virtual void put_char(char c) override {
+    virtual bool put(char c) override {
         _chr_buffer.push_back(c);
+        return flush_count?_chr_buffer.size() > flush_size_advice/flush_count:_chr_buffer.size()>1024;
     }
-    virtual void put_block(const std::string_view &block) override {
+    virtual bool put(const std::string_view &block) override {
         _chr_buffer.insert(_chr_buffer.end(), block.begin(), block.end());
+        return flush_count?_chr_buffer.size() > flush_size_advice/flush_count:_chr_buffer.size()>1024;
     }
     virtual bool flush_sync() override {
         bool ret = true;
@@ -309,8 +314,30 @@ protected:  //character part
                 _chr_buffer.clear();
                 if (cb != nullptr) cb(x);
             });
+        } else {
+            cb(true);
         }
     }
+    virtual std::size_t get_put_size() const override {
+        return _chr_buffer.size();
+    }
+
+    virtual std::vector<char> discard_put_buffer() override {
+        return std::move(_chr_buffer);
+    }
+
+    void update_flush_size(std::size_t r, std::size_t s) {
+        if (r < s) flush_size_advice += r * 3/4;
+        else {
+            if (flush_count) {
+                flush_size_advice += (flush_size_advice*4)/(flush_count*3);
+            } else {
+                flush_size_advice += r * 4/3;
+            }
+        }
+        flush_count++;
+    }
+
 
 protected:  //misc part
     virtual bool timeouted() {return getContent()->timeouted();}
@@ -349,11 +376,122 @@ public:
 };
 
 
+class StreamReferenceWrapper: public AbstractStreamInstance {
+public:
+    StreamReferenceWrapper(AbstractStreamInstance &ref):ref(ref) {}
+
+    virtual void put_back(const std::string_view &buffer) override {ref.put_back(buffer);}
+    virtual void timeout_async_write() override {ref.timeout_async_write();}
+    virtual void read_async(
+            userver::Callback<void(std::basic_string_view<char>)> &&callback)
+                    override {ref.read_async(std::move(callback));}
+    virtual void write_async(const std::string_view &buffer, bool copy_content,
+            userver::Callback<void(bool)> &&callback) override {
+        ref.write_async(buffer, copy_content, std::move(callback));
+    }
+    virtual int get_read_timeout() const override {
+        return ref.get_read_timeout();
+    }
+    virtual std::string_view read_sync() override {
+        return ref.read_sync();
+    }
+    virtual void flush_async(userver::Callback<void(bool)> &&cb) override {
+        return ref.flush_async(std::move(cb));
+    }
+    virtual void clear_timeout() override {
+        ref.clear_timeout();
+    }
+    virtual int get_write_timeout() const override {
+        return ref.get_write_timeout();
+    }
+    virtual void close_input() override {
+        ref.close_input();
+    }
+    virtual bool timeouted() override {
+        return ref.timeouted();
+    }
+    virtual void close_output() override {
+        ref.close_output();
+    }
+    virtual void set_rw_timeout(int tm_in_ms) override {
+        ref.set_rw_timeout(tm_in_ms);
+    }
+    virtual void set_read_timeout(int tm_in_ms) override{
+        ref.set_read_timeout(tm_in_ms);
+    }
+    virtual bool flush_sync() override {
+        return ref.flush_sync();
+    }
+    virtual void set_write_timeout(int tm_in_ms) override {
+        return ref.set_write_timeout(tm_in_ms);
+    }
+    virtual bool put(char c) override {
+        return ref.put(c);
+    }
+    virtual bool put(const std::string_view &block) override {
+        return ref.put(block);
+    }
+    virtual bool write_sync(const std::string_view &buffer) override {
+        return ref.write_sync(buffer);
+    }
+    virtual void timeout_async_read() override {
+        return ref.timeout_async_read();
+    }
+    virtual std::size_t get_put_size() const override {
+        return ref.get_put_size();
+    }
+
+    virtual std::vector<char> discard_put_buffer() override {
+        return ref.discard_put_buffer();
+    }
+
+protected:
+    AbstractStreamInstance &ref;
+};
 
 
+
+template<typename T>
+inline userver::StreamInstance<T>::~StreamInstance() {
+    //destroying object in middle of pending operation is discouraged
+    //however, some actions are performed
+
+    //problem can be pending writes. Destroying stream without waiting for writes can
+    //cause crash. Try to solve here
+
+    //lock the write queue, if the queue is empty
+    _async_write_closed = true;
+    Line *top = nullptr;
+    if (!_cur_line.compare_exchange_strong(top, &_first_line)) {
+        //if lock failed, there were pending write
+        //prepare a promise
+        std::promise<bool> p;
+        //enqueue empty write to the write queue, which will resolve the promise.
+        //this would be the last 'write' in object's lifetime
+        write_async(std::string_view(), false, [&](bool){
+           p.set_value(true);
+        });
+
+        //short any write timneout to zero and terminate any pending wait
+        StreamInstance<T>::timeout_async_write();
+        //wait to future resolve
+        //NOTE: all pending writes should be finished with timeout (false as result)
+        //NOTE: this can hang, if the current thread is also async thread and there is no more async threads
+        //NOTE: this can hang also if there are no async threads - however there is no way to pause this destructor
+        p.get_future().wait();
+    }
+    //clear timeout
+    getContent()->setIOTimeout(0);
+    //cancel all pending actions without calling callback
+    getContent()->cancelAsyncRead(false);
+    getContent()->cancelAsyncWrite(false);
+
+    getContent()->~T();
 
 }
 
+
+}
 
 #endif /* SRC_LIBS_USERVER_STREAM_INSTANCE_H_ */
 

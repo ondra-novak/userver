@@ -3,7 +3,6 @@ cmake_minimum_required(VERSION 2.8)
 set(userver_sources 	netaddr.cpp 
 	socket.cpp 
 	stream.cpp 
-	stream2.cpp
 	socket_server.cpp 
 	http_server.cpp
 	http_client.cpp
@@ -16,9 +15,10 @@ set(userver_sources 	netaddr.cpp
 	init.cpp
 	static_webserver.cpp
 	openapi.cpp
-	websockets_parser.cpp
-	mtwritestream.cpp
+	websockets_parser.cpp	
 	scheduler_impl.cpp
+	limited_stream.cpp
+	chunked_stream.cpp
 )
 
 if(NOT DEFINED USERVER_NO_SSL)

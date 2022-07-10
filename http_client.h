@@ -413,7 +413,7 @@ template<typename Fn>
 inline void userver::HttpClientRequest::sendAsyncCont(Fn &&body, CallbackT<void(int)> &&cb) {
 	std::string_view data = body();
 	while (!data.empty()) {
-		if (s.writeNB(data)) {
+		if (s.put(data)) {
 			s.flush() >> [this, body = std::forward<Fn>(body), cb = std::move(cb)](bool ok) mutable {
 				if (!ok) cb(-1);
 				sendAsyncCont(std::forward<Fn>(body), std::move(cb));

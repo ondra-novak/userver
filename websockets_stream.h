@@ -147,8 +147,6 @@ protected:
         bool send_closed = false;
         ///receiving is closed because requested, so no recv() callback will not be called
         bool recv_closed = false;
-        ///pending flush, send is temporary blocked putting all data to queue
-        bool flushing = false;
         ///requested to close connection, no further sends are allowed, however current queue is still able to flush
         bool pending_close = false;
         ///ping has been sent and no other packet received yet
@@ -165,7 +163,6 @@ protected:
         State(Stream &&s, bool client):s(std::move(s)),serializer(client) {}
 
         static bool write(std::shared_ptr<State> state, std::string_view data);
-        static bool flush(std::shared_ptr<State> state, std::string_view data);
         Message getMessage() ;
         static void handleStdMessage(std::shared_ptr<State> state, const Message &msg);
     };
@@ -214,31 +211,13 @@ inline bool WSStream::send(WSFrameType type, std::string_view data){
 }
 inline bool WSStream::State::write(std::shared_ptr<State> state, std::string_view data) {
     auto &st = *state;
-    if (st.flushing) {
-        st.wrqueue.append(data);
-        return true;
-    } else {
-        return st.flush(state, data);
-    }
-}
-inline bool WSStream::State::flush(std::shared_ptr<State> state, std::string_view data) {
-    auto &st = *state;
     if (st.send_closed) return false;
-    st.s.writeNB(data);
-    st.flushing = true;
-    st.s.flush() >> [state](bool ok) {
-           auto &st = *state;
-           std::lock_guard _(st.mx);
-           if (ok) {
-               st.flushing = false;
-               if (!st.wrqueue.empty()) {
-                   write(state, st.wrqueue);
-                   st.wrqueue.clear();
-               }
-           } else {
-               st.send_closed = true;
-           }
-
+    st.s.write(data, true) >> [state](bool ok) {
+        auto &st = *state;
+        std::lock_guard _(st.mx);
+        if (!ok) {
+            st.send_closed = true;
+        }
     };
     return true;
 }
@@ -259,7 +238,7 @@ inline bool WSStream::timeouted() const {
 
 ///Clears timeout state, after which read request can be repeated
 inline void WSStream::clearTimeout() {
-    state->s.clearTimeout();
+    state->s.clear_timeout();
 }
 
 inline WSStream::Message WSStream::State::getMessage() {
@@ -279,12 +258,12 @@ inline WSStream::Message WSStream::recvSync() {
     if (data.empty()) return Message{WSFrameType::incomplete};
     std::string_view extra = st.parser.parse(data);
     while (!st.parser.isComplete()) {
-        st.s.putBack(extra);
+        st.s.put_back(extra);
         data = st.s.read();
         if (data.empty()) return Message{WSFrameType::incomplete};
         extra = st.parser.parse(data);
     }
-    st.s.putBack(extra);
+    st.s.put_back(extra);
     Message msg = st.getMessage();
     st.handleStdMessage(state, msg);
     return msg;
@@ -297,12 +276,12 @@ template<typename Fn> inline void WSStream::recvAsync(Fn &&fn) {
     if (!st.recv_closed) {
         st.s.read() >> CB([state = this->state, fn = std::forward<Fn>(fn)](CB &me, std::string_view data) mutable {
             auto &st = *state;
-            std::lock_guard _(st.mx);
+            std::unique_lock _(st.mx);
             if (!st.recv_closed) {
                 if (data.empty()) {
                     if (st.s.timeouted() && !st.ping_sent && st.write(state, st.serializer.forgePingFrame(""))) {
                         st.ping_sent = true;
-                        st.s.clearTimeout();
+                        st.s.clear_timeout();
                         st.s.read() >> std::move(me);
                     } else {
                         fn({WSFrameType::incomplete});
@@ -310,9 +289,10 @@ template<typename Fn> inline void WSStream::recvAsync(Fn &&fn) {
                 } else {
                     st.ping_sent = false;
                     auto out = st.parser.parse(data);
-                    st.s.putBack(out);
+                    st.s.put_back(out);
                     if (st.parser.isComplete()) {
                         Message msg= st.getMessage();
+                        _.unlock(); //unlock for callback
                         st.handleStdMessage(state, msg);
                         fn(msg);
                     } else {

@@ -7,6 +7,7 @@
 
 #ifndef SRC_MAIN_HTTP_SERVER_H_
 #define SRC_MAIN_HTTP_SERVER_H_
+#include <userver/stream.h>
 #include <vector>
 #include <string_view>
 #include <functional>
@@ -17,7 +18,6 @@
 #include "async_provider.h"
 #include "isocket.h"
 #include "socket_server.h"
-#include "stream.h"
 #include "header_value.h"
 #include "shared/refcnt.h"
 

@@ -15,6 +15,8 @@
 
 #include "helpers.h"
 #include "socket_server.h"
+#include "limited_stream.h"
+#include "chunked_stream.h"
 
 #ifdef __GNUC__
 #if __GNUC__ < 8
@@ -209,7 +211,7 @@ bool HttpServerRequest::readHeader() {
 	std::string_view buf = stream.read();
 	while (!buf.empty()) {
 		if (readHeader(buf, m)) {
-			stream.putBack(buf);
+			stream.put_back(buf);
 			return true;
 		}
 	}
@@ -226,7 +228,7 @@ void HttpServerRequest::readHeaderAsync(int m, Fn &&fn) {
 		initTime = std::chrono::system_clock::now();
 		bool res = readHeader(data, m);
 		if (res) {
-			stream.putBack(data);
+			stream.put_back(data);
 			fn(true);
 		}
 		else readHeaderAsync(m, std::move(fn));
@@ -337,7 +339,7 @@ bool HttpServerRequest::init(Stream &&stream) {
 
 HttpServerRequest::~HttpServerRequest() {
 	try {
-		if (stream.valid()) {
+		if (stream) {
 			if (!response_sent) {
 				set(CONNECTION,CONN_CLOSE);
 				if (!valid) {
@@ -369,24 +371,24 @@ Stream HttpServerRequest::getBody() {
 		auto te = get(TRANSFER_ENCODING);
 		auto ctlh = get(CONTENT_LENGTH);
 		if (method == "GET" || method == "HEAD") {
-			bodyStream = Stream(std::make_unique<LimitedStream<Stream &> >(stream,0,0));
+			bodyStream = Stream(std::make_unique<LimitedStream>(*stream,0,0));
 		} else if (te.defined && te != TE_CHUNKED) {
-			bodyStream = Stream(std::make_unique<ChunkedStream<Stream &> >(stream, 0, true));
+			bodyStream = Stream(std::make_unique<ChunkedStream>(*stream, 0, true));
 		} else if (ctlh.defined) {
 			auto ctl = ctlh.getUInt();
-			bodyStream = Stream(std::make_unique<LimitedStream<Stream &> >(stream,ctl,0));
+			bodyStream = Stream(std::make_unique<LimitedStream>(*stream,ctl,0));
 		} else {
-			bodyStream = Stream(std::make_unique<LimitedStream<Stream &> >(stream,0,0));
+			bodyStream = Stream(std::make_unique<LimitedStream>(*stream,0,0));
 		}
 		if (hasExpect) {
-			stream.writeNB(httpver);
-			stream.writeNB(" ");
-			stream.writeNB("100 Continue\r\n\r\n");
+			stream.put(httpver);
+			stream.put(" ");
+			stream.put("100 Continue\r\n\r\n");
 			stream.flush();
 		}
 		hasBody = false;
 	} else {
-		bodyStream = Stream(std::make_unique<LimitedStream<Stream &> >(stream,0,0));
+		bodyStream = Stream(std::make_unique<LimitedStream>(*stream,0,0));
 	}
 	return bodyStream;
 
@@ -473,7 +475,7 @@ static char *numToStr(char *buff, std::size_t x) {
 static void putCode(Stream &stream, std::size_t x) {
 	if (x) {
 		putCode(stream, x/10);
-		stream.putCharNB('0' + (x%10));
+		stream.put('0' + (x%10));
 	}
 }
 
@@ -551,23 +553,23 @@ Stream HttpServerRequest::send() {
 
 	std::string_view statusMsg;
 	if (statusMessage.empty()) statusMsg = getStatusCodeMsg(statusCode); else statusMsg = statusMessage;
-	stream.writeNB(httpver);
-	stream.putCharNB(' ');
+	stream.put(httpver);
+	stream.put(' ');
 	putCode(stream, statusCode);
-	stream.putCharNB(' ');
-	stream.writeNB(statusMsg);
-	stream.writeNB(std::string_view(sendHeader.data(), sendHeader.size()));
-	stream.writeNB("\r\n\r\n");
+	stream.put(' ');
+	stream.put(statusMsg);
+	stream.put(std::string_view(sendHeader.data(), sendHeader.size()));
+	stream.put("\r\n\r\n");
 	response_sent = true;
 	if (logger) logger->log(ReqEvent::header_sent,*this);
 	if (nocontent || method == "HEAD" ) {
-		return Stream(std::make_unique<LimitedStream<Stream &> >(stream, 0, 0));
+		return Stream(std::make_unique<LimitedStream>(*stream, 0, 0));
 	} else if (has_transfer_encoding_chunked) {
-		return Stream(std::make_unique<ChunkedStream<Stream &> >(stream, maxChunkSize,false));
+		return Stream(std::make_unique<ChunkedStream>(*stream, maxChunkSize,false));
 	} else if (has_content_length) {
-		return Stream(std::make_unique<LimitedStream<Stream &> >(stream, 0, send_content_length));
+		return Stream(std::make_unique<LimitedStream>(*stream, 0, send_content_length));
 	} else {
-		return Stream(stream.makeReference());
+		return Stream(createStreamReference(stream));
 	}
 }
 
@@ -787,7 +789,7 @@ void HttpServerRequest::sendFileAsync(std::unique_ptr<HttpServerRequest> &reqptr
 		in->read(buff,sizeof(buff));
 		auto cnt = in->gcount();
 		if (cnt) {
-			if (out.writeNB(std::string_view(buff, static_cast<std::size_t>(cnt)))) {
+			if (out.put(std::string_view(buff, static_cast<std::size_t>(cnt)))) {
 				out.flush() >> [reqptr = std::move(reqptr),  in = std::move(in)](Stream &out, bool ok) mutable {
 					if (ok) {
 						sendFileAsync(reqptr, in, out);
@@ -800,7 +802,7 @@ void HttpServerRequest::sendFileAsync(std::unique_ptr<HttpServerRequest> &reqptr
 		}
 	}
 	//empty flush async, just held request until flushed
-	out.flush() >>[reqptr = std::move(reqptr)]() {
+	out.flush() >>[reqptr = std::move(reqptr)](bool) {
 		// empty
 	};
 }
@@ -964,7 +966,7 @@ void HttpServer::listen() {
 	socketServer->waitAcceptAsync([&](std::optional<SocketServer::AcceptInfo> &acpt) {
 		if (acpt.has_value()) {
 			acpt->sock.setIOTimeout(iotimeout);
-			Stream s(std::make_unique<SocketStream>(std::make_unique<Socket>(std::move(acpt->sock))));
+			Stream s = createSocketStream(std::move(acpt->sock));
 			if (!onConnect(s)) {
 				PHttpServerRequest req = std::make_unique<HttpServerRequest>();
 				beginRequest(std::move(s), std::move(req));
@@ -1042,7 +1044,7 @@ void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
 	req->setLogger(PLogger::staticCast(logger));
 	s.read() >> [this, req = std::move(req)](Stream &s, const std::string_view &data) mutable {
 		if (!data.empty()) {
-			s.putBack(data);
+			s.put_back(data);
 			HttpServerRequest *preq = req.get();
 			preq->initAsync(std::move(s), [req = std::move(req), this](bool v) mutable {
 				if (v) {
