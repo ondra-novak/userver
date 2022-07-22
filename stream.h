@@ -255,6 +255,9 @@ public:
 
     using PtrType::PtrType;
 
+    Stream_t(const PtrType &other):PtrType(other) {}
+    Stream_t(PtrType &&other):PtrType(std::move(other)) {}
+
     std::string_view read_sync() {return (*this)->read_sync();}
     void read_async(Callback<void(std::string_view)> &&callback) {(*this)->read_async(std::move(callback));}
     void put_back(const std::string_view &buffer) {(*this)->put_back(buffer);}
@@ -617,6 +620,51 @@ struct EmptyDeleter {
 using Stream = Stream_t<std::unique_ptr<AbstractStreamInstance> >;
 using StreamRef = Stream_t<std::unique_ptr<AbstractStreamInstance, EmptyDeleter> >;
 using SharedStream = Stream_t<std::shared_ptr<AbstractStreamInstance> >;
+
+///Weak shared stream is similar to weak_ptr.
+/**
+ * It refers to existing stream, reflects its closing and disappearence.
+ * To access the stream, you need to call lock(), which converts this object
+ * to SharedStream.
+ *
+ * Useful in for example subscribe-publisher pattern, when original stream is closed,
+ * publisher finds stream closed and removes it from subscribers
+ */
+class WeakStreamRef {
+public:
+
+    WeakStreamRef(const SharedStream &stream):
+        _ptr(stream) {}
+
+    ///Locks the stream, retrieves SharedStream
+    /**
+     * @param target empty object SharedStream (uninitialized)
+     * @retval true lock successful
+     * @retval false stream no longer available
+     */
+    bool lock(SharedStream &target) {
+        auto p = _ptr.lock();
+        if (p != nullptr) {
+            target = SharedStream(std::move(p));
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    ///Determines, whether stream has been closed
+    /**
+     * @retval true, stream has been closed
+     * @retval false, stream is not closed - note this information doesn't mean, that
+     * stream is still opened. You need to call lock() to be sure
+     */
+    bool expired() const {
+        return _ptr.expired();
+    }
+
+protected:
+    std::weak_ptr<AbstractStreamInstance> _ptr;
+};
 
 class Socket;
 
