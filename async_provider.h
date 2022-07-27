@@ -239,7 +239,7 @@ public:
 ///Configuration for asynchronous provider
 struct AsyncProviderConfig {
     ///count of socket dispatchers
-    int socket_dispatchers = 1;
+    unsigned int socket_dispatchers = 1;
     ///count of threads
     /** Default value is zero as in most cases, you want to have creation of threads under your
      * control. This means, you have to create own threads and each thread must call AsyncProvider::start_thread()
@@ -248,7 +248,7 @@ struct AsyncProviderConfig {
      * In this case, the HttpServer uses the value only as parameter, but inicializes
      * the dispatcher with zero threads and then creates own set of threads
      */
-    int threads = 0;
+    unsigned int threads = 0;
     ///force to use poll (default is epoll), for Windows WSAPoll is always used
     bool use_poll = false;
     ///install scheduler
