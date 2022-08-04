@@ -8,11 +8,119 @@
 #ifndef SRC_LIBS_USERVER_STREAM_INSTANCE_H_
 #define SRC_LIBS_USERVER_STREAM_INSTANCE_H_
 
+#include <shared/trailer.h>
 #include <userver/stream.h>
 
 #include <future>
 
 namespace userver {
+
+namespace _details {
+
+struct BufChainAlloc {
+	std::size_t _sz;
+	char *_ptr;
+};
+
+///helper class to store chain of pending writes
+/** each instance holds reference or copy of the buffer
+ * and pointer to next. There is also instance marked as static allocated
+ * which cannot be released
+ *
+ */
+class BufChain {
+public:
+	BufChain(BufChainAlloc &al, Callback<void(bool)> &&cb)
+		:data(al._ptr, al._sz)
+		,cb(std::move(cb))
+		,next(nullptr)
+		,static_alloc(false) {}
+
+	BufChain():next(nullptr),static_alloc(true) {}
+	BufChain(const std::string_view &data, Callback<void(bool)> &&cb):
+		data(data),
+		cb(std::move(cb)),
+		next(nullptr),
+		static_alloc(false) {}
+	BufChain(const BufChain &other) = delete;
+	BufChain &operator=(const BufChain &other) = delete;
+
+	void update(const std::string_view &data, Callback<void(bool)> &&cb) {
+		this->data = data;
+		this->cb = std::move(cb);
+	}
+
+	void call_cb(bool res) {
+		auto cb = std::move(this->cb);
+		if (cb != nullptr) cb(res);
+	}
+
+	struct Deleter {
+		void operator()(BufChain *x) {
+			if (x) x->release();
+		}
+	};
+
+	std::string_view data;
+    Callback<void(bool)> cb;
+	BufChain *next;
+	bool static_alloc;
+
+	void release() {
+		if (next) {
+			next->release();
+			next = nullptr;
+		}
+		if (!static_alloc)
+			delete this;
+	}
+
+	void *operator new(std::size_t sz) {
+		return ::operator new(sz);
+	}
+
+	void *operator new(std::size_t sz, BufChainAlloc &al) {
+		char *ptr = static_cast<char *>(::operator new(sz+al._sz));
+		al._ptr = ptr+sz;
+		return ptr;
+	}
+	void operator delete(void *ptr, BufChainAlloc &al ) {
+		::operator delete(ptr);
+	}
+	void operator delete(void *ptr, std::size_t sz) {
+		::operator delete(ptr);
+	}
+
+	static BufChain *lockPtr() {
+		static BufChain lockInst;
+		return &lockInst;
+	}
+
+	static bool advance(std::unique_ptr<BufChain, Deleter> &ptr) {
+		auto n = ptr->next;
+		ptr->next = nullptr;
+		ptr = std::unique_ptr<BufChain, Deleter>(n);
+		return ptr != nullptr;
+	}
+
+	static std::unique_ptr<BufChain, Deleter> allocCopy(const std::string_view &data, Callback<void(bool)> &&cb) {
+		BufChainAlloc r{data.size()};
+		BufChain *ret = new(r) BufChain(r, std::move(cb));
+		std::copy(data.begin(), data.end(), r._ptr);
+		return std::unique_ptr<BufChain, Deleter>(ret);
+	}
+
+	static std::unique_ptr<BufChain, Deleter> allocRef(const std::string_view &data, Callback<void(bool)> &&cb) {
+		return std::unique_ptr<BufChain, Deleter>(new BufChain(data, std::move(cb)));
+	}
+
+};
+
+using PBufChain = std::unique_ptr<BufChain, BufChain::Deleter>;
+
+
+}
+
 
 template<typename T>
 class StreamInstance: public AbstractStreamInstance {
@@ -47,6 +155,9 @@ protected:  //read part
     std::vector<char> _read_buffer;
     bool _read_buffer_need_expand = true;
     std::string_view _put_back;
+    std::atomic<int> _pending_read = 0;  //<non-zero means there is pending read active
+    std::promise<bool> *_async_read_join = nullptr; //<used during destruction to join reads
+    static constexpr int half_range = std::numeric_limits<int>::max()/2;
 
     void expand_read_buffer() {
         auto sz = _read_buffer.size();
@@ -75,20 +186,33 @@ protected:  //read part
         }
     }
 
+
+
     virtual void read_async(Callback<void(std::string_view)> &&callback) override {
-        if (_put_back.empty()) {
-            if (_read_buffer_need_expand) {
-                expand_read_buffer();
-                _read_buffer_need_expand = false;
-            }
-            getContent()->read(_read_buffer.data(), _read_buffer.size(),
-                              [this, cb = std::move(callback)](int r){
-                _read_buffer_need_expand = r == _read_buffer.size();
-                cb(std::string_view(_read_buffer.data(), r));
-            });
-        } else {
-            callback(pop_put_back());
-        }
+    	//initialize trailer - handles decreasing pending reads and join the reading
+    	//trailer is executed when this function exits, but
+    	//can be carried to the async call
+    	auto t = ondra_shared::trailer([this]{
+        	if (!(--_pending_read & ~half_range)) {
+        		_async_read_join->set_value(true);
+        	}
+    	});
+    	if (++_pending_read > half_range) { //this means, that reading is no more possible
+    		clear_timeout(); //we are going to report eof, so timeout must be cleared
+        	callback(std::string_view());
+    	} else if (_put_back.empty()) {
+				if (_read_buffer_need_expand) {
+					expand_read_buffer();
+					_read_buffer_need_expand = false;
+				}
+				getContent()->read(_read_buffer.data(), _read_buffer.size(),
+						[this, cb = std::move(callback), t= std::move(t)] (int r){
+					_read_buffer_need_expand = static_cast<std::size_t>(r) == _read_buffer.size();
+					cb(std::string_view(_read_buffer.data(), r));
+				});
+		} else {
+			callback(pop_put_back());
+		}
     }
 
     virtual void put_back(const std::string_view &buffer) override {
@@ -106,21 +230,13 @@ protected:  //read part
 
 protected:  //write part
 
-    struct Line {
-        std::string_view data;
-        std::vector<char> buffer;
-        Callback<void(bool)> cb;
-        Line *next = nullptr;
 
-        ~Line() {
-            //next->next == next - marks statically allocated object (tail)
-            if (next && next->next != next) delete next;
-        }
-    };
+    using Line = _details::BufChain;
+    using PLine = _details::PBufChain;
 
     std::atomic<Line *> _cur_line = std::atomic<Line *>(nullptr);
-    std::atomic<bool> _async_write_closed = std::atomic<bool>(false);
-
+    std::atomic<std::size_t> _pending_writes;
+    std::atomic<bool> _async_write_join = false;
     Line _first_line;
 
     virtual bool write_sync(const std::string_view &buffer) override {
@@ -129,149 +245,117 @@ protected:  //write part
         return r?write_sync(buffer.substr(r)):false;
     }
 
-    static void set_line_content(Line &ln, const std::string_view &buffer, bool copy_content, Callback<void(bool)> &&callback) {
-        if (copy_content) {
-            ln.buffer.clear();
-            std::copy(buffer.begin(), buffer.end(), std::back_inserter(ln.buffer));
-            ln.data = std::string_view(ln.buffer.data(), ln.buffer.size());
-        } else {
-            ln.data = buffer;
-        }
-        ln.cb = std::move(callback);
-    }
-
     virtual void write_async(const std::string_view &buffer, bool copy_content, Callback<void(bool)> &&callback) override {
-        Line *top = nullptr;
-        //check whether first line is unused
-        if (_cur_line.compare_exchange_strong(top, &_first_line)) {
-            //it is unused, we are first arriving - we also locked the first line, so
-            //no other threads can be there
-            set_line_content(_first_line, buffer, copy_content, std::move(callback));
-            _first_line.next = nullptr;
-            write_async_lines();
-        } else {
-            //we cannot lock the _first_line, so there is a pending operation
-            //allocate new line
-            std::unique_ptr<Line> l (std::make_unique<Line>());
-            //initialize the line
-            set_line_content(*l, buffer, copy_content, std::move(callback));
-            //try to append the line to the current pending list lock-free
-            do {
-                //update next as old top
-                l->next = top;
-                //try to set new top if there is current top equal
-            } while (!_cur_line.compare_exchange_strong(top, l.get()));
-            //when done, release ownership, line is pending
-            l.release();
-            //if the previous top was null, pending operation already finished meanwhile
-            //so this thread owns the queue, it must initiate transfer
-            if (top == nullptr) {
-                //initiate transfer
-                write_async_lines_unlock();
-            }
-        }
-
+    	if (_async_write_join.load()) {
+    			callback(false);
+    	} else {
+    		write_async2(buffer,copy_content,std::move(callback));
+    	}
     }
-
-    void write_async_lines() noexcept {
-        //in locked state
-        if (_first_line.data.empty()) {
-            _first_line.data = std::string_view("",1); //just dummy settings
-            finish_write_first_line(1); //send 1 to avoid error
-        } else if (_async_write_closed.load()) {
-            finish_write_first_line(0); //send 0 as timeout
-        } else {
-            getContent()->write(_first_line.data.data(), _first_line.data.size(),[this](int r){
-                update_flush_size(r, _first_line.data.size());
-                finish_write_first_line(r);
-            });
-        }
-    }
-
-    void finish_write_first_line(int c) noexcept  {
-        //in locked state
-        bool ok = false;
-        if (c) {
-            _first_line.data = _first_line.data.substr(c);
-            if (!_first_line.data.empty()) {
-                write_async_lines();
-                return;
-            } else {
-                ok = true;
-            }
-        }
-        auto cb = std::move(_first_line.cb);
-        write_async_lines_unlock();
-        if (cb != nullptr) cb(ok);
-    }
-
-    void write_async_lines_unlock() noexcept  {
-        //still locked
-        //to unlock this, expect _first_line as _cur_line and set it to null
-        Line *top = &_first_line;
-        if (!_cur_line.compare_exchange_strong(top,nullptr)) {
-            //we can't set _cur_line to null, so there is list
-            //we need to get this list atomically, reset the list and keep locked
-            //se we will swap the list with pointer to _first_line
-            Line *t = _cur_line.exchange(&_first_line);
-            //t contains current list, and _cur_line is reset
-            //we need to reverse it
-            Line *rt = nullptr;
-            while (t && t != &_first_line) {
-                //store next
-                Line *x = t->next;
-                //set next to rt
-                t->next = rt;
-                //make rt new top
-                rt = t;
-                //restore t to continue
-                t = x;
-            }
-            write_async_chain_lines(std::unique_ptr<Line>(rt));
-        }
+    void write_async2(const std::string_view &buffer, bool copy_content, Callback<void(bool)> &&callback)  {
+    	_pending_writes+=buffer.size();
+    	//if not copy_content - we can prepare buffer without allocation and copying
+    	if (!copy_content) {
+    		//try to lock for first line - cur queue must be empty
+    		Line *top = nullptr;
+    		if (_cur_line.compare_exchange_strong(top, &_first_line)) {
+    			//we locked, we are using _first_line
+    			//update first line
+    			_first_line.update(buffer, std::move(callback));
+    			//send queue
+    			write_async_send_queue(true);
+    			//return here
+    			return;
+    		}
+    	}
+    	//allocate depend on copy_content
+		auto b = copy_content
+				?Line::allocCopy(buffer, std::move(callback))
+				:Line::allocRef(buffer, std::move(callback));
+		//enqueue the next item
+		auto r = b->next = _cur_line;
+		while (!_cur_line.compare_exchange_weak(b->next, b.get())) {
+			r = b->next;
+		}
+		b.release();
+		//if it is first item, start operation
+		if (r == nullptr) {
+			write_async_send_queue(true);
+		} //otherwise someone else will handle
     }
 
 
-    void write_async_chain_lines(std::unique_ptr<Line> &&ln) {
-        if (ln == nullptr) {
-            write_async_lines_unlock();
-        } else {
-            const void *d = ln->data.data();
-            std::size_t sz = ln->data.size();
-            if (sz && !_async_write_closed.load()) {
-                getContent()->write(d,sz,[=, ln= std::move(ln)](int r) mutable {
-                    if (r) {
-                        ln->data = ln->data.substr(r);
-                        if (ln->data.empty()) {
-                          if (ln->cb != nullptr) {
-                              ln->cb(true);
-                          }
-                          Line *n = ln->next;
-                          ln->next = nullptr;
-                          ln = std::unique_ptr<Line>(n);
-                        }
-                        write_async_chain_lines(std::move(ln));
-                    } else {
-                        auto c = ln.get();
-                        while (c) {
-                            if (c->cb != nullptr) {
-                                c->cb(false);
-                            }
-                            c = c->next;
-                        }
-                    }
-                });
-            } else {
-                if (ln->cb!= nullptr) {
-                    ln->cb(!_async_write_closed.load());
-                }
-                Line *n = ln->next;
-                ln->next = nullptr;
-                write_async_chain_lines(std::unique_ptr<Line>(n));
-            }
-        }
+    void write_async_send_queue(bool status) {
+    	auto lk = Line::lockPtr();
+    	//first lock queue and reorder
+    	auto top = _cur_line.exchange(lk);
+    	Line *send_queue = nullptr;
+    	//stop on null or lockPtr
+    	while (top != nullptr && top != lk) {
+    		//reverse order of queue
+    		auto n = top->next;
+    		top->next= send_queue;
+    		send_queue = top;
+    		top = n;
+    	}
+    	//flush this queue
+    	write_async_send_queue_next(PLine(send_queue), status);
     }
 
+    void write_async_send_queue_next(PLine &&send_queue, bool status) noexcept {
+    	//send_queue shouldn't be null there, however ...
+    	if (send_queue != nullptr) {
+    		//if status is not good, or data are empty - handle callback
+    		if (!status || send_queue->data.empty() || _async_write_join.load()) {
+    			_pending_writes-= send_queue->data.size();
+    			//pick callback and store it outside
+    			auto cb = std::move(send_queue->cb);
+    			//advance send_queue ptr - if it is not null
+    			if (Line::advance(send_queue)) {
+    				//if callback is defined, call it
+    				if (cb!=nullptr) cb(status);
+    				//recursive continue with new queue status
+    				write_async_send_queue_next(std::move(send_queue), status);
+    			} else {
+    				//queue is empty, unlock it
+    				auto top = Line::lockPtr();
+    				//try to unlock the queue - set queue to nullptr
+    		    	if (!_cur_line.compare_exchange_strong(top,nullptr)) {
+    		    		//if not success, there is still work to do
+    		    		//call the callback now
+    		    		if (cb!=nullptr) cb(status);
+    		    		//continue with new queue
+    		    		write_async_send_queue(status);
+    		    	} else {
+    		    		//unlock successful - we can call the last callback
+    		    		if (cb!=nullptr) cb(status);
+    		    	}
+    			}
+    		} else {
+    			//data to send - asynchronously send them
+				getContent()->write(send_queue->data.data(),
+									send_queue->data.size(),
+									[send_queue = std::move(send_queue), this](int r) mutable {
+					if (r>0) {
+						_pending_writes-= r;
+						//some data sent, commit the buffer
+						send_queue->data = send_queue->data.substr(r);
+						//repeat operation with success state
+						write_async_send_queue_next(std::move(send_queue), true);
+					} else {
+						//timeout or error - repeat operation with failed states
+						write_async_send_queue_next(std::move(send_queue), false);
+					}
+				});
+    		}
+    	} else {
+    		//in this case. just try to unlock
+			auto top = Line::lockPtr();
+	    	if (!_cur_line.compare_exchange_strong(top,nullptr)) {
+	    		write_async_send_queue(status);
+	    	}
+    	}
+    }
 
     virtual void close_output() {
         write_async(std::string_view(), false, [this](bool) {
@@ -285,19 +369,23 @@ protected:  //write part
     }
 
 
+    virtual std::size_t get_pending_write_size() const {
+    	return _pending_writes;
+    }
+
+
 protected:  //character part
 
     std::vector<char> _chr_buffer;
-    std::size_t flush_size_advice = 0;
-    std::size_t flush_count = 0;
+    static std::size_t flush_advice_size;
 
     virtual bool put(char c) override {
         _chr_buffer.push_back(c);
-        return flush_count?_chr_buffer.size() > flush_size_advice/flush_count:_chr_buffer.size()>1024;
+        return _chr_buffer.size() > flush_advice_size;
     }
     virtual bool put(const std::string_view &block) override {
         _chr_buffer.insert(_chr_buffer.end(), block.begin(), block.end());
-        return flush_count?_chr_buffer.size() > flush_size_advice/flush_count:_chr_buffer.size()>1024;
+        return _chr_buffer.size() > flush_advice_size;
     }
     virtual bool flush_sync() override {
         bool ret = true;
@@ -326,18 +414,6 @@ protected:  //character part
         return std::move(_chr_buffer);
     }
 
-    void update_flush_size(std::size_t r, std::size_t s) {
-        if (r < s) flush_size_advice += r * 3/4;
-        else {
-            if (flush_count) {
-                flush_size_advice += (flush_size_advice*4)/(flush_count*3);
-            } else {
-                flush_size_advice += r * 4/3;
-            }
-        }
-        flush_count++;
-    }
-
 
 protected:  //misc part
     virtual bool timeouted() {return getContent()->timeouted();}
@@ -350,6 +426,9 @@ protected:  //misc part
 
 
 };
+
+template<typename T>
+std::size_t StreamInstance<T>::flush_advice_size = 4096;
 
 class StreamSocketWrapper: public std::unique_ptr<ISocket> {
 public:
@@ -444,6 +523,9 @@ public:
     virtual std::vector<char> discard_put_buffer() override {
         return ref.discard_put_buffer();
     }
+    virtual std::size_t get_pending_write_size() const override {
+    	return ref.get_pending_write_size();
+    }
 
 protected:
     AbstractStreamInstance &ref;
@@ -453,41 +535,65 @@ protected:
 
 template<typename T>
 inline userver::StreamInstance<T>::~StreamInstance() {
-    //destroying object in middle of pending operation is discouraged
-    //however, some actions are performed
 
-    //problem can be pending writes. Destroying stream without waiting for writes can
-    //cause crash. Try to solve here
+	//disable writes
+	_async_write_join = true;
+	//disable read and signal pending read to not trigger promise yet
+	// however if there is no pending read (half_range + 1), no
+	//action is needed
+	//setting atomic to this value prevents futher reading
+	if ((_pending_read+=half_range+1) > (half_range+1)) {
+		//there is pending read, we must explicitly join
+		std::promise<bool> join_read;
+		//set promise ptr
+		_async_read_join = &join_read;
+		//decrease 1 from pending read, and if there is some reading...
+		if (--_pending_read > half_range) {
+			//interrupt it
+			timeout_async_read();
+			//wait until promise is resolved
+			join_read.get_future().wait();
+		}
+	}
 
-    //lock the write queue, if the queue is empty
-    _async_write_closed = true;
-    Line *top = nullptr;
-    if (!_cur_line.compare_exchange_strong(top, &_first_line)) {
-        //if lock failed, there were pending write
-        //prepare a promise
-        std::promise<bool> p;
-        //enqueue empty write to the write queue, which will resolve the promise.
-        //this would be the last 'write' in object's lifetime
-        write_async(std::string_view(), false, [&](bool){
-           p.set_value(true);
-        });
+	//lock the queue - to detect, whether there is pending write operation
+	auto lk = Line::lockPtr();
+	//top = top most waiting operation
+	auto top = _cur_line.exchange(lk);
+	//if top is not nullptr, there is a pending write
+	if (top != nullptr) {
+		//there is pending write, we must explicitly join
+		std::promise<bool> join_write;
+		//prepare (statically allocated) line with empty buffer
+		Line jpt;
+		//set callback, which resolves promise on completion of the queue
+		jpt.cb = [&](bool){
+			join_write.set_value(true);
+		};
+		//set the line to queue.
+		auto nt = _cur_line.exchange(&jpt);
+		//nt must be lockPtr(). If it is nullptr, current pending
+		//operation already completed
+		if (nt) {
+			//timeout any write
+			timeout_async_write();
+			//in case of non-null, wait for completion
+			join_write.get_future().wait();
+		}
+		//there should be no pending write operation
+		//delete the queue, invoke callbacks with 'false'
+		while (top != nullptr && top != lk) {
+			auto nx = top->next;
+			top->next = nullptr;
+			if (top->cb != nullptr) top->cb(false);
+			top->release();
+			top = nx;
+		}
+	}
 
-        //short any write timneout to zero and terminate any pending wait
-        StreamInstance<T>::timeout_async_write();
-        //wait to future resolve
-        //NOTE: all pending writes should be finished with timeout (false as result)
-        //NOTE: this can hang, if the current thread is also async thread and there is no more async threads
-        //NOTE: this can hang also if there are no async threads - however there is no way to pause this destructor
-        p.get_future().wait();
-    }
-    //clear timeout
-    getContent()->setIOTimeout(0);
-    //cancel all pending actions without calling callback
-    getContent()->cancelAsyncRead(false);
-    getContent()->cancelAsyncWrite(false);
-
+	//now we are good
+	//destroy the underlying socket
     getContent()->~T();
-
 }
 
 

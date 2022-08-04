@@ -53,6 +53,10 @@ public:
     virtual void timeout_async_read() override;
     virtual std::size_t get_put_size() const override;
     virtual std::vector<char> discard_put_buffer() override;
+    virtual std::size_t get_pending_write_size() const override {
+    	return _ref->get_pending_write_size();
+    }
+
 
 protected:
     StreamRef _ref;

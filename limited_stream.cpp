@@ -125,7 +125,7 @@ void LimitedStream::close_output() {
     if (write_limit) {
         char buff[4096];
         for (char &c: buff) c = fill_char;
-        while (write_limit>sizeof(buff)) {
+        while (static_cast<std::size_t>(write_limit)>sizeof(buff)) {
             LimitedStream::write_sync(std::string_view(buff, sizeof(buff)));
         }
         LimitedStream::write_sync(std::string_view(buff, write_limit));

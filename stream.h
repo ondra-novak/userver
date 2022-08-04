@@ -142,6 +142,17 @@ public:
      */
     virtual void close_output() = 0;
 
+    ///Retrieves current pending write size
+    /** total count of bytes to be written . You can use this to
+     * chech high watermark level - to slow down writes if the
+     * number is too high
+     *
+     * @return bytes waiting to be written
+     *
+     * @note function doesn't work for sync writes
+     */
+    virtual std::size_t get_pending_write_size() const = 0;
+
 
     ///Shorten writing timeout to zero
     /**
