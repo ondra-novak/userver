@@ -180,13 +180,14 @@ Dispatcher_EPoll::Task Dispatcher_EPoll::getTask() {
 					iter = std::find_if(regs.begin(), regs.end(), [&](const Reg &rg){
 							return rg.op == Op::read;
 					});
-				} else if (ev.events & (EPOLLOUT|EPOLLERR)) {
+				} else if (ev.events & EPOLLOUT) {
 					iter = std::find_if(regs.begin(), regs.end(), [&](const Reg &rg){
 							return rg.op == Op::write;
 					});
 				}
 				if (iter == regs.end() && (ev.events & EPOLLERR)) {
-					iter = regs.end();
+				    //if nothing selected but we have EPOLLERR, then select first callback to handle this
+					iter = regs.begin();
 				}
 
 

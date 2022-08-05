@@ -681,6 +681,7 @@ class Socket;
 
 Stream createSocketStream(Socket &&s);
 Stream createSocketStream(std::unique_ptr<ISocket> &&socket);
+
 ///Creates new object which refers the stream passed as argument
 /**
  * @param stream object to be referenced
@@ -693,6 +694,8 @@ Stream createSocketStream(std::unique_ptr<ISocket> &&socket);
  *
  */
 Stream createStreamReference(Stream &stream);
+
+
 }
 
 

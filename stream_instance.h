@@ -156,7 +156,7 @@ protected:  //read part
     bool _read_buffer_need_expand = true;
     std::string_view _put_back;
     std::atomic<int> _pending_read = 0;  //<non-zero means there is pending read active
-    std::promise<bool> *_async_read_join = nullptr; //<used during destruction to join reads
+    std::promise<void> *_async_read_join = nullptr; //<used during destruction to join reads
     static constexpr int half_range = std::numeric_limits<int>::max()/2;
 
     void expand_read_buffer() {
@@ -193,8 +193,8 @@ protected:  //read part
     	//trailer is executed when this function exits, but
     	//can be carried to the async call
     	auto t = ondra_shared::trailer([this]{
-        	if (!(--_pending_read & ~half_range)) {
-        		_async_read_join->set_value(true);
+        	if ((--_pending_read) == half_range) {
+        		_async_read_join->set_value();
         	}
     	});
     	if (++_pending_read > half_range) { //this means, that reading is no more possible
@@ -304,9 +304,10 @@ protected:  //write part
 
     void write_async_send_queue_next(PLine &&send_queue, bool status) noexcept {
     	//send_queue shouldn't be null there, however ...
-    	if (send_queue != nullptr) {
+    	while (send_queue != nullptr) {
+    	    status = status & !_async_write_join.load();
     		//if status is not good, or data are empty - handle callback
-    		if (!status || send_queue->data.empty() || _async_write_join.load()) {
+    		if (!status || send_queue->data.empty()) {
     			_pending_writes-= send_queue->data.size();
     			//pick callback and store it outside
     			auto cb = std::move(send_queue->cb);
@@ -314,8 +315,7 @@ protected:  //write part
     			if (Line::advance(send_queue)) {
     				//if callback is defined, call it
     				if (cb!=nullptr) cb(status);
-    				//recursive continue with new queue status
-    				write_async_send_queue_next(std::move(send_queue), status);
+    				//continue
     			} else {
     				//queue is empty, unlock it
     				auto top = Line::lockPtr();
@@ -326,15 +326,20 @@ protected:  //write part
     		    		if (cb!=nullptr) cb(status);
     		    		//continue with new queue
     		    		write_async_send_queue(status);
+    		    		//break this;
+    		    		return;
     		    	} else {
     		    		//unlock successful - we can call the last callback
     		    		if (cb!=nullptr) cb(status);
+    		    		//break this
+    		    		return;
     		    	}
     			}
     		} else {
+    		    auto q = send_queue.get();
     			//data to send - asynchronously send them
-				getContent()->write(send_queue->data.data(),
-									send_queue->data.size(),
+				getContent()->write(q->data.data(),
+									q->data.size(),
 									[send_queue = std::move(send_queue), this](int r) mutable {
 					if (r>0) {
 						_pending_writes-= r;
@@ -347,8 +352,11 @@ protected:  //write part
 						write_async_send_queue_next(std::move(send_queue), false);
 					}
 				});
+				//break this
+				return;
     		}
-    	} else {
+    	}
+    	{
     		//in this case. just try to unlock
 			auto top = Line::lockPtr();
 	    	if (!_cur_line.compare_exchange_strong(top,nullptr)) {
@@ -544,13 +552,13 @@ inline userver::StreamInstance<T>::~StreamInstance() {
 	//setting atomic to this value prevents futher reading
 	if ((_pending_read+=half_range+1) > (half_range+1)) {
 		//there is pending read, we must explicitly join
-		std::promise<bool> join_read;
+		std::promise<void> join_read;
 		//set promise ptr
 		_async_read_join = &join_read;
 		//decrease 1 from pending read, and if there is some reading...
 		if (--_pending_read > half_range) {
 			//interrupt it
-			timeout_async_read();
+			StreamInstance<T>::timeout_async_read();
 			//wait until promise is resolved
 			join_read.get_future().wait();
 		}
@@ -563,12 +571,12 @@ inline userver::StreamInstance<T>::~StreamInstance() {
 	//if top is not nullptr, there is a pending write
 	if (top != nullptr) {
 		//there is pending write, we must explicitly join
-		std::promise<bool> join_write;
+		std::promise<void> join_write;
 		//prepare (statically allocated) line with empty buffer
 		Line jpt;
 		//set callback, which resolves promise on completion of the queue
 		jpt.cb = [&](bool){
-			join_write.set_value(true);
+			join_write.set_value();
 		};
 		//set the line to queue.
 		auto nt = _cur_line.exchange(&jpt);
@@ -576,7 +584,7 @@ inline userver::StreamInstance<T>::~StreamInstance() {
 		//operation already completed
 		if (nt) {
 			//timeout any write
-			timeout_async_write();
+		    StreamInstance<T>::timeout_async_write();
 			//in case of non-null, wait for completion
 			join_write.get_future().wait();
 		}

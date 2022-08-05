@@ -217,6 +217,28 @@ protected:
 
 };
 
+
+class RecursiveCounter{
+public:
+
+    RecursiveCounter() {
+        ++get_counter();
+    }
+    ~RecursiveCounter() {
+        --get_counter();
+    }
+    bool can_recursive() const {
+        return get_counter() < 10;
+    }
+
+
+protected:
+    static int &get_counter() {
+        static thread_local int counter = 0;
+        return counter;
+    }
+};
+
 using PendingOp = PendingOpT<std::mutex>;
 
 }
