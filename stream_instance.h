@@ -17,7 +17,7 @@ namespace userver {
 
 namespace _details {
 
-struct BufChainAlloc {
+struct BufChainAlloc { // @suppress("Miss copy constructor or assignment operator")
 	std::size_t _sz;
 	char *_ptr;
 };

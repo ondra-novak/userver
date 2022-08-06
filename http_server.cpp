@@ -196,6 +196,8 @@ bool HttpServerRequest::readHeader(std::string_view &buff, int &m) {
 						inHeaderData.push_back(c);
 					}
 				} break;
+		default:
+		        break;
 		}
 		pos++;
 	}
@@ -300,11 +302,13 @@ void HttpServerRequest::reuse_buffers(HttpServerRequest &from) {
 	//reuse buffers from other request to avoid reallocations
 	std::swap(firstLine, from.firstLine);
 	std::swap(inHeaderData, from.inHeaderData);
+	std::swap(inHeader, from.inHeader);
 	std::swap(sendHeader, from.sendHeader);
 	std::swap(logBuffer, from.logBuffer);
 	std::swap(buff, from.buff);
 	firstLine.clear();
 	inHeaderData.clear();
+	inHeader.clear();
 	sendHeader.clear();
 	logBuffer.clear();
 	buff.str(std::string());
