@@ -21,6 +21,17 @@ public:
 	static const unsigned int opcodePing = 9;
 	static const unsigned int opcodePong = 10;
 
+	///Connection has been reset by peer
+	/** This status is only returned by WSStream in case that connection has been closed */
+	static const unsigned int closeConnReset = 1;
+	///Connection has been timeouted, remote side did not respond to ping message
+	/** This status is only returned by WSStream
+	 *
+	 * When underlying stream timeouts, the ping frame is send to other side. It is
+	 * expected that pong frame (or other data) arrives to the next timeout. If nothing
+	 * of this happens, connection is marked as closed with closeConnTimeout as reason
+	 */
+	static const unsigned int closeConnTimeout = 2;
 	static const unsigned int closeNormal = 1000;
 	static const unsigned int closeGoingAway = 1001;
 	static const unsigned int closeProtocolError = 1002;

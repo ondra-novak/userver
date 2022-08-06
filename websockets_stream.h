@@ -7,33 +7,32 @@
 
 #ifndef SRC_USERVER_WEBSOCKETS_STREAM_H_
 #define SRC_USERVER_WEBSOCKETS_STREAM_H_
-#include <userver/stream.h>
+#include "stream.h"
 #include "websockets_parser.h"
+#include "async_provider.h"
+#include <future>
 
 namespace userver {
 
-class WSStream;
 
-///Web socket stream
+///Wraps stream to websocket stream allowing to send or receive message
 /**
- * Object also solves some MT safety
+ * The stream supports both sync or async operations and also receive loop, which
+ * allows you to write function to process incoming messages. Note that only
+ * thread can handle reading and there can by only one pending reading at time.
  *
- * Object allows to send message frames, through method send(). Multiple threads can
- * send message, and sending message is done asynchronously (without need to wait for flush())
+ * Sending messages is MT safe, any thread can send message
  *
- * Object allows to receive messages through either synchronous or asynchronous call. In
- * both cases it can handle ping from remote server and close request from remote server by
- * sending apropriate response. However these frames are still obtainable by recv()
+ * There is write buffer, which enqueues messages to be send. You can check
+ * buffer size by function get_buffered_amount(). You can also synchronously
+ * wait to empty this buffer
  *
- * Asynchronous recv() can also handle read timeout by sending ping packet to keep connection
- * alive. It sends only one ping packed and if the connection is inactive for next period of
- * time, the timeout event is passed to the caller. However connection is still not flagged as
- * broken, and caller can use another option to determine, whether connection is live or dead
- *
- * To continuously receive frames, caller must rearm the reading after processing each message.
- *
- *
- *
+ * Destruction of the stream ends all pending operations. Destructor blocks thread
+ * until all pending operation completes (mostly unsuccessful). It also beaks receive
+ * loop, if there is such active. Enequeued messages are not sent during destruction
+ * (there is no linger). If you need to ensure, that all data has been sent, you
+ * need wait manually, for example using flush() and then destroy the stream. It is also
+ * good idea to inform other side about closing the stream before it is being closed.
  */
 class WSStream: public WebSocketsConstants {
 public:
@@ -45,294 +44,421 @@ public:
         std::string_view data;
         ///code associated with the frame
         /** It is applied only for certain types of frame, otherwise it is zero */
-        int code;
+        unsigned int code;
     };
 
-    class Promise final {
+    class ReadHelper final {
     public:
-        Promise(WSStream &owner):owner(owner) {}
-        Promise(const Promise &) = delete;
-        Promise &operator=(const Promise &) = delete;
-        Promise(Promise &&x):owner(x.owner) {}
+        ReadHelper(WSStream &owner):owner(owner) {}
+        ReadHelper(const ReadHelper &) = default;
+        ReadHelper &operator=(const ReadHelper &) = delete;
 
-        operator Message();
-        template<typename Fn> void operator>>(Fn &&fn);
+        operator Message() const {
+            return owner.recv_sync();
+        }
+        template<typename Fn> void operator>>(Fn &&fn) {
+            owner.recv_async(std::forward<Fn>(fn));
+        }
     protected:
         WSStream &owner;
     };
 
-    ///Construct WSStream from opened TCP stream (wsConnect or wsConnectAsync)
-    /**
-     * @param s established connection - stream
-     * @param client set true, if the this side of stream is client, set false for server
-     */
+
     WSStream(Stream &&s, bool client);
+    WSStream(WSStream &&other);
+    ~WSStream();
 
-    WSStream(WSStream &&other):state(other.state) {
-        other.state = nullptr;
-    }
 
-    ///Destructor
-    ~WSStream() {
-        shutdownRecv();
-    }
-    ///Receive message either synchronously or asynchronously
+    ///Read the next message
     /**
-     * @return helper object. You can convert result to Message to perform actual synchronous reading,
-     * or chain >> lambda function to perform reading asynchronously
+     * @return ReadHelper object which can be converted to Message,
+     * which causes synchronous reading, or by chaining callback causes asynchronous
+     * reading.
      *
-     * @code
-     * Message msg = wss.recv()
+     * When special message is read, it is automatically handled. For example, if ping
+     * message is read, it is automatically responded with pong message. The same for
+     * close message
      *
-     * wss.recv() >> [](const Message &msg) {
-     *                          ...
-     *             };
-     *
-     * @endcode
-     *
-     * @note MT safety is not satisfied. Only one thread is allowed to receive messages at time.
+     * If stream timeouts, WSFrameType::incomplete is returned. The message doesn't contain
+     * data.
      */
-    Promise recv();
+    ReadHelper recv();
 
-    ///Send message
+    ///Reads message synchronously
     /**
-     * @param type type of message
-     * @param data message payload
-     * @retval true message sent or queued to be sent
-     * @retval false message was not send, because stream is closed
+     * @return block and returns message, when it is received. In case of timeout,
+     * WSFrameType::incomplete is returned. In case of reset, WSFrameType::connClose
+     * is returned with reason closeConnReset
      *
-     * @note MT safety is satisfied. Multiple threads can write messages without need to lock
+     * When special message is read, it is automatically handled. For example, if ping
+     * message is read, it is automatically responded with pong message. The same for
+     * close message
+     *
+     * @note Function is not MT Safe for receiving. Only one thread can call this function.
+     * It is also not possible to use recvSync while recvAsync is still pending, this
+     * results as undefined behavior
      */
-    bool send(WSFrameType type, std::string_view data);
-    ///Request to close
+    Message recv_sync();
+
+    ///Reads message asynchronously
     /**
-     * Sends close request to the other side. This can cause, that stream will be closed
+     * @param fn a callback function which receives Message. see recvSync() for description
+     * of various messages
      *
-     * @note This call doesn't close the stream. You can still receive messages. However you
-     * cannot send any futher message
-     * @param code closing code
-     * @retval true success
-     * @retval false can't send, stream is probably closing
+     * @note Function is not MT Safe for receiving. Only one thread can call this function.
+     * Function can be called only if there is no other pending receiving including
+     * recvSync(), otherwise results as undefined behavior
+     *
      */
-    bool close(unsigned int code = WebSocketsConstants::closeNormal);
-    ///Determines whether stream timeouted
+    template<typename Fn>
+    void recv_async(Fn &&fn);
+
+
+    ///Reads messages in a loop
     /**
-     * During recv() you can receive WSFrameType::incomplete which means, that stream
-     * was interrupted during receiving next frame. It can happen for either connection
-     * reset or timeout. You can use this function to determine, whether connection timeouted.
+     * @param fn a callback function which receives Message. It can return true to continue
+     * loop, or false to exit loop. Automatically handles ping/pong messages, so these
+     * messages wouldn't be passed to the callback function. If the connection is closed,
+     * then WSFrameType::connClose is passed to the callback function. In this case,
+     * return value is ignored and loop is exited
+     */
+    template<typename Fn>
+    void recv_async_loop(Fn &&fn);
+
+    ///Sends text frame
+    /**
+     * @param data content of the frame
+     * @retval true enqueued
+     * @retval false connection is closed
      *
-     * To continue reading timeouted connection, you need to clearTimeout();
+     * @note MT Safety - function is MT Safe.
+     */
+    bool send_text(const std::string_view &data);
+
+    ///Sends binary frame
+    /**
+     * @param data content of the frame
+     * @retval true enqueued
+     * @retval false connection is closed
      *
-     * @retval true connection is flagged as timeouted
-     * @retval false connection is not flagged as timeouted
+     * @note MT Safety - function is MT Safe
+     */
+    bool send_binary(const std::string_view &data);
+
+    ///Sends ping frame
+    /**
+     * @param data optionally data send along with the request
+     * @retval true enqueued
+     * @retval false connection is closed
+     *
+     * @note MT Safety - function is MT Safe
+     */
+    bool send_ping(const std::string_view &data = std::string_view());
+
+    ///Sends pong frame
+    /**
+     * @param data data of the frame (mostly copied from the Message)
+     * @retval true enqueued
+     * @retval false connection is closed
+     *
+     * @note MT Safety - function is MT Safe
+     */
+    bool send_pong(const std::string_view &data);
+
+    ///Request to close connection
+    /**
+     * @param code reason of closing (optional)
+     * @retval true enqueued
+     * @retval false connection is closed
+     *
+     * @note MT Safety - function is MT Safe
+     */
+    bool send_close(int code = closeNormal);
+
+
+    ///Retrieves buffered amount of bytes
+    /**
+     * @return the number of bytes of data that have been queued
+     * using calls to send_xxxx() but not yet transmitted to the network.
+     * This value resets to zero once all queued data has been sent.
+     * This value does not reset to zero when the connection is closed;
+     * if you keep calling send_xxx(), this will continue to climb.
+     */
+    std::size_t get_buffered_amount() const;
+
+    ///Creates future, which is resolved, one the output buffer is emptied
+    /**
+     * @return future. The future resolves by true, if the flush completed, or false, if
+     * the flush failed, because stream is in disconnected/timeouted state. It also resolves
+     * as false in case, that stream is being destroyed
+     *
+     * @note MT Safety - function is MT Safe
+     *
+     * @note If there are additional sends after the future is created, they are not
+     * counted in. So the future becomes resolved once the buffered amount bytes
+     * known in time of future creation is written to the network regardless on
+     * how many bytes has been enqueued later
+     */
+    std::future<bool> flush();
+
+    ///Determines, whether reading timeouted. You can check this status after WSFrameType::incomplete is received
+    /**
+     * @retval true timeouted
+     * @retval false not timeouted
      */
     bool timeouted() const;
-    ///Clears timeout flag
-    void clearTimeout();
-    ///Allows to shutdown asynchronous receive before stream is destroyed
-    /**
-     * A big struggle can be to ensure, that there is no asynchronous pending call before
-     * the stream is destroyed. This call causes, that if there is such pending call, it
-     * can arrive only before this function exits, then any pending call is canceled. This
-     * function also blocks any futher recv()
-     */
-    void shutdownRecv();
 
+    ///Clears timeout flag
+    /**
+     * You need to clear timeout if you want to continue in reading after stream timeouted
+     */
+    void clear_timeout();
 
 protected:
 
-    struct State {
-        std::recursive_mutex mx;
-        ///sending is closed due error or peer reset, this prevent further send
-        bool send_closed = false;
-        ///receiving is closed because requested, so no recv() callback will not be called
-        bool recv_closed = false;
-        ///requested to close connection, no further sends are allowed, however current queue is still able to flush
-        bool pending_close = false;
-        ///ping has been sent and no other packet received yet
-        bool ping_sent = false;
-        ///write queue
-        std::string wrqueue;
-        //stream
-        Stream s;
-        ///parser
-        WebSocketParser parser;
-        ///serializer
-        WebSocketSerializer serializer;
 
-        State(Stream &&s, bool client):s(std::move(s)),serializer(client) {}
+    WebSocketParser _parser;
+    WebSocketSerializer _serializer;
+    std::mutex _serializer_lock;
+    std::atomic<unsigned int> _close_code = 0;
+    Stream _s;
 
-        static bool write(std::shared_ptr<State> state, std::string_view data);
-        Message getMessage() ;
-        static void handleStdMessage(std::shared_ptr<State> state, const Message &msg);
-    };
 
-    using PState = std::shared_ptr<State>;
+    Message get_message() const;
+    Message get_close_message() const;
+    void handle_special_message(const Message &msg);
 
-    PState state;
+    template<typename Fn>
+    void recv_async_loop2(Fn &&fn, bool ping_sent);
 
-    Message recvSync();
-    template<typename Fn> void recvAsync(Fn &&fn);
-
+    void finish_write(bool ok);
 
 };
 
-inline WSStream::WSStream(Stream &&s, bool client)
-: state(std::make_shared<State>(std::move(s), client)) {
 
-}
 
-inline WSStream::Promise WSStream::recv() {
-    return Promise(*this);
-}
-inline WSStream::Promise::operator Message() {
-    return owner.recvSync();
-}
-template<typename Fn> inline void WSStream::Promise::operator >>(Fn &&fn) {
-    owner.recvAsync(std::forward<Fn>(fn));
-}
-inline bool WSStream::send(WSFrameType type, std::string_view data){
-    auto &st = *state;
-    std::lock_guard _(st.mx);
-    if (st.send_closed || st.pending_close) return false;
 
-    std::string_view out;
-    switch (type) {
-    case WSFrameType::binary: out = st.serializer.forgeBinaryFrame(data);break;
-    case WSFrameType::text: out = st.serializer.forgeTextFrame(data);break;
-    case WSFrameType::ping: out = st.serializer.forgePingFrame(data);break;
-    case WSFrameType::pong: out = st.serializer.forgePongFrame(data);break;
-    default: return false;
+inline WSStream::Message WSStream::recv_sync() {
+    if (_close_code.load()) {
+        return get_close_message();
     }
-
-    return st.write(state, out);
-
-
-}
-inline bool WSStream::State::write(std::shared_ptr<State> state, std::string_view data) {
-    auto &st = *state;
-    if (st.send_closed) return false;
-    st.s.write(data, true) >> [state](bool ok) {
-        auto &st = *state;
-        std::lock_guard _(st.mx);
-        if (!ok) {
-            st.send_closed = true;
+    do {
+        std::string_view data = _s.read();
+        if (data.empty()) {
+            return Message{WSFrameType::incomplete};
         }
+        _s.put_back(_parser.parse(data));
+        if (_parser.isComplete()) {
+            Message m = get_message();
+            handle_special_message(m);
+            _parser.reset();
+            return m;
+        }
+    } while (true);
+}
+
+template<typename Fn>
+inline void WSStream::recv_async(Fn &&fn) {
+    if (_close_code.load()) {
+        fn(get_close_message());
+    } else {
+        _s.read() >> [=, fn = std::forward<Fn>(fn)](const std::string_view &data) mutable {
+            if (data.empty()) {
+                fn(Message{WSFrameType::incomplete});
+            } else {
+                _s.put_back(_parser.parse(data));
+                if (_parser.isComplete()) {
+                    Message m = get_message();
+                    handle_special_message(m);
+                    _parser.reset();
+                    fn(m);
+                } else {
+                    recv_async(std::forward<Fn>(fn));
+                }
+            }
+        };
+    }
+}
+
+template<typename Fn>
+inline void WSStream::recv_async_loop(Fn &&fn) {
+    recv_async_loop2(std::forward<Fn>(fn), false);
+}
+
+template<typename Fn>
+inline void WSStream::recv_async_loop2(Fn &&fn, bool ping_sent) {
+    auto stream = _s.get();
+    recv() >> [=, fn = std::forward<Fn>(fn)](Message &msg) mutable { //not const for purpose
+        do {
+            //examine message
+            switch (msg.type) {
+                case WSFrameType::connClose:
+                        fn(msg);
+                        return;
+                case WSFrameType::incomplete:
+                    if (timeouted()) {
+                        if (ping_sent) {
+                            unsigned int need = 0;
+                            _close_code.compare_exchange_strong(need, closeConnTimeout);
+                            fn(get_close_message());
+                        } else {
+                            clear_timeout();
+                            send_ping();
+                            recv_async_loop2(std::forward<Fn>(fn), true);
+                        }
+                    } else {
+                        unsigned int need = 0;
+                        _close_code.compare_exchange_strong(need, closeConnReset);
+                        fn(get_close_message());
+                    }
+                    return;
+                case WSFrameType::ping:
+                case WSFrameType::pong:
+                        break;
+                default:
+                    if (!fn(msg)) return;
+                    break;
+            };
+
+            _parser.reset();
+            //fetch unprocessed data (can be empty)
+            std::string_view pb = stream->read_sync_nb();
+            //process data and put back rest (function checks whether it is empty)
+            stream->put_back(_parser.parse(pb));
+            //if message is not complete)
+            if (!_parser.isComplete()) {
+                //continue asynchronously
+                recv_async_loop2(std::forward<Fn>(fn), false);
+                return;
+            }
+            //retrieve message (overwrite previous message);
+            msg = get_message();
+            //handle special messages
+            handle_special_message(msg);
+            //continue by examining message
+        }while (true);
     };
-    return true;
 }
 
-inline bool WSStream::close(unsigned int code) {
-    auto &st = *state;
-    std::lock_guard _(st.mx);
-    if (st.send_closed) return false;
-    st.pending_close = true;
-    return st.write(state,st.serializer.forgeCloseFrame(code));
-
+inline bool WSStream::send_text(const std::string_view &data) {
+    std::lock_guard _(_serializer_lock);
+    if (!_close_code) {
+        _s.write_async(_serializer.forgeTextFrame(data),true,
+                       Callback<void(bool)>(this,&WSStream::finish_write));
+        return true;
+    } else {
+        return false;
+    }
 }
 
+inline bool WSStream::send_binary(const std::string_view &data) {
+    std::lock_guard _(_serializer_lock);
+    if (!_close_code) {
+        _s.write_async(_serializer.forgeBinaryFrame(data),true,
+                       Callback<void(bool)>(this,&WSStream::finish_write));
+        return true;
+    } else {
+        return false;
+    }
+}
+
+inline bool WSStream::send_ping(const std::string_view &data) {
+    std::lock_guard _(_serializer_lock);
+    if (!_close_code) {
+        _s.write_async(_serializer.forgePingFrame(data),true,
+                       Callback<void(bool)>(this,&WSStream::finish_write));
+        return true;
+    } else {
+        return false;
+    }
+}
+
+inline bool WSStream::send_pong(const std::string_view &data) {
+    std::lock_guard _(_serializer_lock);
+    if (!_close_code) {
+        _s.write_async(_serializer.forgePongFrame(data),true,
+                       Callback<void(bool)>(this,&WSStream::finish_write));
+        return true;
+    } else {
+        return false;
+    }
+}
+
+inline bool WSStream::send_close(int code) {
+    std::lock_guard _(_serializer_lock);
+    if (!_close_code) {
+        _s.write_async(_serializer.forgeCloseFrame(code),true,
+                       Callback<void(bool)>(this,&WSStream::finish_write));
+        return true;
+    } else {
+        return false;
+    }
+}
+
+inline std::size_t WSStream::get_buffered_amount() const {
+    return _s->get_pending_write_size();
+}
+
+inline std::future<bool> WSStream::flush() {
+    std::promise<bool> promise;
+    std::future<bool> future = promise.get_future();
+    _s.write(std::string_view(), false) >> [promise = std::move(promise)](bool ok) mutable {
+        promise.set_value(ok);
+    };
+    return future;
+}
 
 inline bool WSStream::timeouted() const {
-    return state->s.timeouted();
+    return _close_code.load() == 0 && _s.timeouted();
 }
 
-///Clears timeout state, after which read request can be repeated
-inline void WSStream::clearTimeout() {
-    state->s.clear_timeout();
+
+inline void WSStream::clear_timeout() {
+    _s.clear_timeout();
 }
 
-inline WSStream::Message WSStream::State::getMessage() {
-    Message msg;
-    msg.type = parser.getFrameType();
-    if (msg.type == WSFrameType::connClose) {
-        msg.code = parser.getCode();
-    }
-    msg.data = parser.getData();
-    return msg;
-
-}
-
-inline WSStream::Message WSStream::recvSync() {
-    auto &st = *state;
-    std::string_view data = st.s.read();
-    if (data.empty()) return Message{WSFrameType::incomplete};
-    std::string_view extra = st.parser.parse(data);
-    while (!st.parser.isComplete()) {
-        st.s.put_back(extra);
-        data = st.s.read();
-        if (data.empty()) return Message{WSFrameType::incomplete};
-        extra = st.parser.parse(data);
-    }
-    st.s.put_back(extra);
-    Message msg = st.getMessage();
-    st.handleStdMessage(state, msg);
-    return msg;
-}
-
-template<typename Fn> inline void WSStream::recvAsync(Fn &&fn) {
-    using CB = Callback<void(const std::string_view &)>;
-    auto &st = *state;
-    std::lock_guard _(st.mx);
-    if (!st.recv_closed) {
-        st.s.read() >> CB([state = this->state, fn = std::forward<Fn>(fn)](CB &me, std::string_view data) mutable {
-            auto &st = *state;
-            std::unique_lock _(st.mx);
-            if (!st.recv_closed) {
-                if (data.empty()) {
-                    if (st.s.timeouted() && !st.ping_sent && st.write(state, st.serializer.forgePingFrame(""))) {
-                        st.ping_sent = true;
-                        st.s.clear_timeout();
-                        st.s.read() >> std::move(me);
-                    } else {
-                        fn({WSFrameType::incomplete});
-                    }
-                } else {
-                    st.ping_sent = false;
-                    auto out = st.parser.parse(data);
-                    st.s.put_back(out);
-                    if (st.parser.isComplete()) {
-                        Message msg= st.getMessage();
-                        _.unlock(); //unlock for callback
-                        st.handleStdMessage(state, msg);
-                        fn(msg);
-                    } else {
-                        st.s.read() >> std::move(me);
-                    }
-                }
-
-            }
-        });
+inline WSStream::Message WSStream::get_message() const {
+    if (_close_code.load()) return get_close_message();
+    auto t = _parser.getFrameType();
+    if (t == WSFrameType::connClose) {
+        return Message{t,std::string_view(),_parser.getCode()};
+    } else {
+        return Message{t, _parser.getData()};
     }
 }
 
-inline void WSStream::shutdownRecv() {
-    if (state != nullptr) {
-        auto &st = *state;
-        std::lock_guard _(st.mx);
-        st.recv_closed = true;
-    }
+inline WSStream::Message WSStream::get_close_message() const {
+    return Message{WSFrameType::connClose, std::string_view(), _close_code.load()};
 }
 
-inline void WSStream::State::handleStdMessage(std::shared_ptr<State> state, const Message &msg) {
-    auto &st = *state;
+inline void WSStream::handle_special_message(const Message &msg) {
+    unsigned int zero = 0;
     switch (msg.type) {
     case WSFrameType::connClose:
-        write(state, st.serializer.forgeCloseFrame(msg.code));
-        st.pending_close = true;
-        st.send_closed = true;
+        send_close(closeNormal);
+        _close_code.compare_exchange_strong(zero, msg.code);
         break;
     case WSFrameType::ping:
-        write(state, st.serializer.forgePongFrame(msg.data));
+        send_pong(msg.data);
         break;
     default:
         break;
-    }
+    };
+}
+
+inline void WSStream::finish_write(bool ok) {
+    unsigned int zero = 0;
+    if (!ok) _close_code.compare_exchange_strong(zero, closeConnReset);
+}
+
+inline WSStream::~WSStream() {
+    unsigned int zero = 0;
+    //set this variable, during destruction of the stream, this halts all pending operations
+    _close_code.compare_exchange_strong(zero, closeConnReset);
+    //reset stream;
+    _s.reset();
 }
 
 
 }
-
-
-
-
 #endif /* SRC_USERVER_WEBSOCKETS_STREAM_H_ */

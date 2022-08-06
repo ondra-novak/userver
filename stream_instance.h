@@ -166,12 +166,6 @@ protected:  //read part
         _read_buffer.resize(sz, 0);
     }
 
-    std::string_view pop_put_back() {
-        auto s = _put_back;
-        _put_back = std::string_view();
-        return s;
-    }
-
     virtual std::string_view read_sync() override {
         if (_put_back.empty()) {
             if (_read_buffer_need_expand) {
@@ -182,8 +176,14 @@ protected:  //read part
             _read_buffer_need_expand = r == _read_buffer.size();
             return std::string_view(_read_buffer.data(), r);
         } else {
-            return pop_put_back();
+            return StreamInstance::read_sync_nb();
         }
+    }
+
+    virtual std::string_view read_sync_nb() override {
+        auto s = _put_back;
+        _put_back = std::string_view();
+        return s;
     }
 
 
@@ -211,7 +211,7 @@ protected:  //read part
 					cb(std::string_view(_read_buffer.data(), r));
 				});
 		} else {
-			callback(pop_put_back());
+			callback(StreamInstance::read_sync_nb());
 		}
     }
 
@@ -481,6 +481,9 @@ public:
     }
     virtual std::string_view read_sync() override {
         return ref.read_sync();
+    }
+    virtual std::string_view read_sync_nb() override {
+        return ref.read_sync_nb();
     }
     virtual void flush_async(userver::Callback<void(bool)> &&cb) override {
         return ref.flush_async(std::move(cb));

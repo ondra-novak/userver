@@ -35,11 +35,15 @@ void LimitedStream::timeout_async_write() {
     _ref.timeout_async_read();
 }
 
+std::string_view LimitedStream::read_sync_nb() {
+    auto s = put_back_buff;
+    put_back_buff = std::string_view();
+    return s;
+}
+
 void LimitedStream::read_async(Callback<void(std::string_view)> &&callback) {
     if (!put_back_buff.empty()) {
-        auto c = put_back_buff;
-        put_back_buff = std::string_view();
-        callback(c);
+        callback(LimitedStream::read_sync_nb());
     } else if (read_limit) {
         _ref.read_async([this, cb = std::move(callback)](std::string_view data) {
            auto c = data.substr(0,read_limit);
@@ -72,9 +76,7 @@ int LimitedStream::get_read_timeout() const {
 
 std::string_view LimitedStream::read_sync() {
     if (!put_back_buff.empty()) {
-        auto c = put_back_buff;
-        put_back_buff = std::string_view();
-        return c;
+        return read_sync_nb();
     } else if (read_limit) {
         auto data = _ref.read_sync();
         auto c = data.substr(0,read_limit);

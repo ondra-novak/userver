@@ -39,6 +39,18 @@ public:
      */
     virtual std::string_view read_sync() = 0;
 
+    /// Read synchronously without blocking
+    /**
+     * @return read data, or empty string. The empty string doesn't say anything about
+     * the state of the stream. It only means, that no data can be read without blocking.
+     *
+     * This should be fastest possible operation. In most of cases, it works with
+     * put_back() data. if there are no such data, it always returns the empty string.
+     *
+     * If the stream doesn't support this operation, it could always return the empty string
+     */
+    virtual std::string_view read_sync_nb() = 0;
+
     ///Read stream asynchronously
     /**
      * @param callback a callback function which is called when at least one byte is ready to
@@ -282,7 +294,7 @@ public:
     bool put(const std::string_view &block) {return (*this)->put(block);}
     bool flush_sync() {return (*this)->flush_sync();}
     void flush_async(Callback<void(bool)> &&cb) {(*this)->flush_async(std::move(cb));}
-    bool timeouted() {return (*this)->timeouted();}
+    bool timeouted() const {return (*this)->timeouted();}
     void clear_timeout() {(*this)->clear_timeout();}
     void set_read_timeout(int tm_in_ms) {(*this)->set_read_timeout(tm_in_ms);}
     void set_write_timeout(int tm_in_ms) {(*this)->set_write_timeout(tm_in_ms);}

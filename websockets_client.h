@@ -13,6 +13,7 @@
 namespace userver {
 
 
+
 inline std::optional<WSStream> wsConnect(HttpClient &httpclient, const HttpClient::URL &url, int *code_out = nullptr) {
 
 	if (code_out) *code_out = 0;
@@ -96,8 +97,10 @@ public:
     void connect(const std::string_view &url);
     void disconnect();
 
-    bool send(WSFrameType type, std::string_view data);
-    void onMessage(MsgCallback &&cb);
+    bool send_text(const std::string_view &data);
+    bool send_binary(const std::string_view &data);
+    bool send_close(unsigned int code);
+    void on_message(MsgCallback &&cb);
 
 
     WebSocketClient(const WebSocketClient &) = delete;
@@ -133,7 +136,7 @@ inline void WebSocketClient::connect(const std::string_view &url) {
             } else {
                 std::lock_guard _(mx);
                 pending_connect.clear();
-                if (msgcb != nullptr) msgcb(Message{WSFrameType::connClose,"",status});
+                if (msgcb != nullptr) msgcb(Message{WSFrameType::connClose,"",static_cast<unsigned int>(status)});
             }
         };
     });
@@ -145,15 +148,29 @@ inline void WebSocketClient::disconnect() {
     ws.reset();
 }
 
-inline void WebSocketClient::onMessage(MsgCallback &&cb) {
+inline bool WebSocketClient::send_text(const std::string_view &data) {
+    std::unique_lock _(mx);
+    if (!ws.has_value()) return false;
+    return ws->send_text(data);
+
+}
+
+inline bool WebSocketClient::send_binary(const std::string_view &data) {
+    std::unique_lock _(mx);
+    if (!ws.has_value()) return false;
+    return ws->send_binary(data);
+}
+
+inline bool WebSocketClient::send_close(unsigned int code) {
+    std::unique_lock _(mx);
+    if (!ws.has_value()) return false;
+    return ws->send_close(code);
+}
+
+inline void WebSocketClient::on_message(MsgCallback &&cb) {
     msgcb = std::move(cb);
 }
 
-inline bool WebSocketClient::send(WSFrameType type, std::string_view data) {
-    std::unique_lock _(mx);
-    if (!ws.has_value()) return false;
-    return ws->send(type, data);
-}
 
 
 }

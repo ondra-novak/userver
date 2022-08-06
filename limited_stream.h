@@ -38,6 +38,7 @@ public:
     virtual void write_async(const std::string_view &buffer, bool copy_content,
                 Callback<void(bool)> &&callback) override;
     virtual int get_read_timeout() const override;
+    virtual std::string_view read_sync_nb() override;
     virtual std::string_view read_sync() override;
     virtual void flush_async(userver::Callback<void(bool)> &&cb) override;
     virtual void clear_timeout() override;

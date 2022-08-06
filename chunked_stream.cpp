@@ -53,6 +53,11 @@ std::size_t ChunkedStream::parseChunkLine(const std::string &ln) {
 }
 
 void ChunkedStream::read_async(Callback<void(std::string_view)> &&callback) {
+    if (!putback_buff.empty()) {
+        callback(ChunkedStream::read_sync_nb());
+        return;
+    }
+
     if (chunk_size) {
         _ref->read_async([=, cb = std::move(callback)](std::string_view data) mutable {
            if (data.empty()) {
@@ -137,7 +142,17 @@ int ChunkedStream::get_read_timeout() const {
     return _ref->get_read_timeout();
 }
 
+
+std::string_view ChunkedStream::read_sync_nb() {
+    std::string_view s = putback_buff;
+    putback_buff = std::string_view();
+    return s;
+
+}
+
 std::string_view ChunkedStream::read_sync() {
+    if (!putback_buff.empty()) return ChunkedStream::read_sync_nb();
+
     if (chunk_size) {
         auto data = _ref->read_sync();
         if (data.empty()) {
