@@ -20,6 +20,7 @@
 #include "socket_server.h"
 #include "header_value.h"
 #include "shared/refcnt.h"
+#include <sstream>
 
 namespace userver {
 
@@ -147,6 +148,7 @@ public:
 	/**
 	 * @param reqptr request pointer (wrapped to unique ptr)
 	 * @param path path to file to send
+	 * @param buffer_size size of buffer allocated for transfer (defines largest continuous write - largest chunk for chunked stream)
 	 * @retval true file transfer started
 	 * @retval false file not found
 	 *
@@ -159,7 +161,7 @@ public:
 	 * request object.
 	 *
 	 */
-	static bool sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, const std::string_view &path);
+	static bool sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, const std::string_view &path, std::size_t buffer_size = 16384);
 
 	///Sends error page
 	/**
@@ -289,10 +291,11 @@ protected:
 
 	bool parse();
 	bool processHeaders();
-	static void sendFileAsync(std::unique_ptr<HttpServerRequest> &reqptr, std::unique_ptr<std::istream>&in, Stream &out);
+	static void sendFileAsync(std::unique_ptr<HttpServerRequest> &reqptr, std::unique_ptr<std::istream>&in, Stream &out, std::vector<char> &buff);
 
 
 	Stream stream;
+	std::stringstream buff;
 	KeepAliveCallback klcb;
 	PLogger logger;
 	bool enableKeepAlive = false;

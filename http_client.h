@@ -17,6 +17,7 @@
 #include "netaddr.h"
 #include "stream.h"
 #include "header_value.h"
+#include <sstream>
 
 
 namespace userver {
@@ -228,6 +229,7 @@ protected:
 	void addHeaderInternal(const std::string_view &key, const std::string_view &value);
 
 	Stream s;
+	std::stringstream buff;
 	std::string host;
 	bool has_te = false;
 	bool has_te_chunked = false;
@@ -239,7 +241,7 @@ protected:
 	std::string_view st_message;
 	std::string_view protocol;
 	HeaderMap responseHeaders;
-	int status;
+	int status = -1;
 
 	void finish_headers(bool message);
 	void prepareUserStream();
@@ -411,18 +413,45 @@ inline void HttpClientRequest::sendAsync(Fn &&body, CallbackT<void(int)> &&cb) {
 
 template<typename Fn>
 inline void userver::HttpClientRequest::sendAsyncCont(Fn &&body, CallbackT<void(int)> &&cb) {
-	std::string_view data = body();
-	while (!data.empty()) {
-		if (s.put(data)) {
-			s.flush() >> [this, body = std::forward<Fn>(body), cb = std::move(cb)](bool ok) mutable {
-				if (!ok) cb(-1);
-				sendAsyncCont(std::forward<Fn>(body), std::move(cb));
-			};
-		} else {
-			data = body();
-		}
-	}
-	sendAsync(std::move(cb));
+    //read body part
+    std::string_view data = body();
+    //empty means end, not empty
+    if (!data.empty()) {
+        //for small buffer
+        if (data.size()<1000) {
+            //use stringstream to collect more data
+            buff.str(std::string());
+            //write first part
+            buff.write(data.data(),data.size());
+            //repeat until buffer is larger or data are empty
+            while (buff.tellp() < 4096) {
+                //read next part of body
+                data = body();
+                //empty data, exit
+                if (data.empty()) break;
+                //append data
+                buff.write(data.data(),data.size());
+            }
+            //write buffer asynchronously - continue when it is ok
+            s.write_async(buff, [this,isend = data.empty(), cb = std::move(cb), body = std::forward<Fn>(body)](bool ok) mutable {
+               //not ok - return -1
+               if (!ok) cb(-1);
+               //body is end? finish request
+               else if (isend) sendAsync(std::move(cb));
+               //else continue reading body
+               else sendAsyncCont(std::forward<Fn>(body), std::move(cb));
+            });
+        } else {
+            //body part is large enough, send it at once
+            s.write_async(data, true, [this,cb = std::move(cb), body = std::forward<Fn>(body)](bool ok) mutable {
+                if (!ok) cb(-1);
+                else sendAsyncCont(std::forward<Fn>(body), std::move(cb));
+            });
+        }
+    } else {
+        //empty body, finish request
+        sendAsync(std::move(cb));
+    }
 }
 
 }

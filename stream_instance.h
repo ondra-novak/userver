@@ -382,47 +382,6 @@ protected:  //write part
     }
 
 
-protected:  //character part
-
-    std::vector<char> _chr_buffer;
-    static std::size_t flush_advice_size;
-
-    virtual bool put(char c) override {
-        _chr_buffer.push_back(c);
-        return _chr_buffer.size() > flush_advice_size;
-    }
-    virtual bool put(const std::string_view &block) override {
-        _chr_buffer.insert(_chr_buffer.end(), block.begin(), block.end());
-        return _chr_buffer.size() > flush_advice_size;
-    }
-    virtual bool flush_sync() override {
-        bool ret = true;
-        if (!_chr_buffer.empty()) {
-            ret = write_sync(std::string_view(_chr_buffer.data(), _chr_buffer.size()));
-            _chr_buffer.clear();
-        }
-        return ret;
-    }
-    virtual void flush_async(Callback<void(bool)> &&cb) override {
-        if (!_chr_buffer.empty()) {
-            write_async(std::string_view(_chr_buffer.data(), _chr_buffer.size()), false,
-                        [this, cb = std::move(cb)](bool x){
-                _chr_buffer.clear();
-                if (cb != nullptr) cb(x);
-            });
-        } else {
-            cb(true);
-        }
-    }
-    virtual std::size_t get_put_size() const override {
-        return _chr_buffer.size();
-    }
-
-    virtual std::vector<char> discard_put_buffer() override {
-        return std::move(_chr_buffer);
-    }
-
-
 protected:  //misc part
     virtual bool timeouted() {return getContent()->timeouted();}
     virtual void clear_timeout() {getContent()->clearTimeout();}
@@ -435,8 +394,6 @@ protected:  //misc part
 
 };
 
-template<typename T>
-std::size_t StreamInstance<T>::flush_advice_size = 4096;
 
 class StreamSocketWrapper: public std::unique_ptr<ISocket> {
 public:
@@ -485,9 +442,6 @@ public:
     virtual std::string_view read_sync_nb() override {
         return ref.read_sync_nb();
     }
-    virtual void flush_async(userver::Callback<void(bool)> &&cb) override {
-        return ref.flush_async(std::move(cb));
-    }
     virtual void clear_timeout() override {
         ref.clear_timeout();
     }
@@ -509,30 +463,14 @@ public:
     virtual void set_read_timeout(int tm_in_ms) override{
         ref.set_read_timeout(tm_in_ms);
     }
-    virtual bool flush_sync() override {
-        return ref.flush_sync();
-    }
     virtual void set_write_timeout(int tm_in_ms) override {
         return ref.set_write_timeout(tm_in_ms);
-    }
-    virtual bool put(char c) override {
-        return ref.put(c);
-    }
-    virtual bool put(const std::string_view &block) override {
-        return ref.put(block);
     }
     virtual bool write_sync(const std::string_view &buffer) override {
         return ref.write_sync(buffer);
     }
     virtual void timeout_async_read() override {
         return ref.timeout_async_read();
-    }
-    virtual std::size_t get_put_size() const override {
-        return ref.get_put_size();
-    }
-
-    virtual std::vector<char> discard_put_buffer() override {
-        return ref.discard_put_buffer();
     }
     virtual std::size_t get_pending_write_size() const override {
     	return ref.get_pending_write_size();

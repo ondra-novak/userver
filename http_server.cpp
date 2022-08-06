@@ -302,10 +302,12 @@ void HttpServerRequest::reuse_buffers(HttpServerRequest &from) {
 	std::swap(inHeaderData, from.inHeaderData);
 	std::swap(sendHeader, from.sendHeader);
 	std::swap(logBuffer, from.logBuffer);
+	std::swap(buff, from.buff);
 	firstLine.clear();
 	inHeaderData.clear();
 	sendHeader.clear();
 	logBuffer.clear();
+	buff.str(std::string());
 }
 
 std::size_t HttpServerRequest::getIdent() const {
@@ -352,7 +354,8 @@ HttpServerRequest::~HttpServerRequest() {
 				}
 				else sendErrorPage(204);
 			}
-			stream.flush();
+			stream.write_async(buff,nullptr);
+			buff.str(std::string());
 			if (logger) logger->log(ReqEvent::done,*this);
 			if (enableKeepAlive && !hasBody && klcb != nullptr) klcb(stream, *this);
 		}
@@ -381,10 +384,9 @@ Stream HttpServerRequest::getBody() {
 			bodyStream = Stream(std::make_unique<LimitedStream>(*stream,0,0));
 		}
 		if (hasExpect) {
-			stream.put(httpver);
-			stream.put(" ");
-			stream.put("100 Continue\r\n\r\n");
-			stream.flush();
+		    buff << httpver << " 100 Continue\r\n\r\n";
+		    stream.write_async(buff, nullptr);
+		    buff.str(std::string());
 		}
 		hasBody = false;
 	} else {
@@ -472,7 +474,7 @@ static char *numToStr(char *buff, std::size_t x) {
 	}
 }
 
-static void putCode(Stream &stream, std::size_t x) {
+static void putCode(std::ostream &stream, std::size_t x) {
 	if (x) {
 		putCode(stream, x/10);
 		stream.put('0' + (x%10));
@@ -508,9 +510,9 @@ void HttpServerRequest::send(const std::string_view &body) {
 	if (!has_content_length && statusCode != 204 && statusCode != 304) {
 		set("Content-Length", body.length());
 	}
+
 	Stream s = send();
-	s.write(body);
-	s.flush();
+	s.write_sync(body);
 }
 
 Stream HttpServerRequest::send() {
@@ -553,13 +555,9 @@ Stream HttpServerRequest::send() {
 
 	std::string_view statusMsg;
 	if (statusMessage.empty()) statusMsg = getStatusCodeMsg(statusCode); else statusMsg = statusMessage;
-	stream.put(httpver);
-	stream.put(' ');
-	putCode(stream, statusCode);
-	stream.put(' ');
-	stream.put(statusMsg);
-	stream.put(std::string_view(sendHeader.data(), sendHeader.size()));
-	stream.put("\r\n\r\n");
+	buff << httpver << " " << statusCode << " " << statusMsg << std::string_view(sendHeader.data(), sendHeader.size()) << "\r\n\r\n";
+	stream.write_async(buff, nullptr);
+	buff.str(std::string());
 	response_sent = true;
 	if (logger) logger->log(ReqEvent::header_sent,*this);
 	if (nocontent || method == "HEAD" ) {
@@ -719,7 +717,7 @@ void HttpServerRequest::setContentTypeFromExt(std::string_view ext) {
 	setContentType(contentTypeFromExtension(ext));
 }
 
-bool HttpServerRequest::sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, const std::string_view &pathname) {
+bool HttpServerRequest::sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, const std::string_view &pathname, std::size_t buffer_size) {
 	using namespace std::filesystem;
 	try {
 	std::filesystem::path p(pathname);
@@ -772,7 +770,10 @@ bool HttpServerRequest::sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, co
 				reqptr->set(CONTENT_LENGTH,static_cast<std::size_t>(sz));
 				Stream out = reqptr->send();
 
-				sendFileAsync(reqptr, file, out);
+				std::vector<char> buffer;
+				buffer.resize(buffer_size);
+
+				sendFileAsync(reqptr, file, out, buffer);
 			}
 		}
 	}
@@ -783,28 +784,26 @@ bool HttpServerRequest::sendFile(std::unique_ptr<HttpServerRequest> &&reqptr, co
 	}
 }
 
-void HttpServerRequest::sendFileAsync(std::unique_ptr<HttpServerRequest> &reqptr, std::unique_ptr<std::istream>&in, Stream &out) {
-	char buff[10000];
-	while (!(!(*in))) {
-		in->read(buff,sizeof(buff));
-		auto cnt = in->gcount();
-		if (cnt) {
-			if (out.put(std::string_view(buff, static_cast<std::size_t>(cnt)))) {
-				out.flush() >> [reqptr = std::move(reqptr),  in = std::move(in)](Stream &out, bool ok) mutable {
-					if (ok) {
-						sendFileAsync(reqptr, in, out);
-					}
-				};
-				return;
-			}
-		} else {
-			break;
-		}
-	}
-	//empty flush async, just held request until flushed
-	out.flush() >>[reqptr = std::move(reqptr)](bool) {
-		// empty
-	};
+void HttpServerRequest::sendFileAsync(std::unique_ptr<HttpServerRequest> &reqptr, std::unique_ptr<std::istream>&in, Stream &out, std::vector<char> &buff) {
+    //any error reported on *in means stop reading
+    if (!(!(*in))) {
+       //read to buffer
+       in->read(buff.data(), buff.size());
+       //count of bytes read
+       auto cnt = in->gcount();
+       //if count non zero
+       if (cnt) {
+           //write buffer asynchronously
+           out.write(std::string_view(buff.data(), cnt),false)
+                   >> [buff = std::move(buff), reqptr = std::move(reqptr), in = std::move(in), &out](bool ok) mutable {
+               //if written
+               if (ok) {
+                   //continue writing
+                   sendFileAsync(reqptr, in, out, buff);
+               }
+           };
+       }
+    }
 }
 
 void HttpServerMapper::addPath(const std::string_view &path, Handler &&handler) {
@@ -813,13 +812,6 @@ void HttpServerMapper::addPath(const std::string_view &path, Handler &&handler) 
 	else mapping->pathMapping.emplace(std::string(path), std::move(handler));
 }
 
-/*void HttpServerMapper::serve(Stream &&stream) {
-	auto req = std::make_unique<HttpServerRequest>();
-	req->init(std::move(stream));
-	if (!execHandlerByHost(req)) {
-		req->sendErrorPage(404);
-	}
-}*/
 
 bool HttpServerMapper::execHandler(PHttpServerRequest &req, const std::string_view &vpath) {
 	try {

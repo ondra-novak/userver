@@ -14,6 +14,7 @@
 
 #include <vector>
 #include <memory>
+#include <iostream>
 
 namespace userver {
 
@@ -181,66 +182,6 @@ public:
     virtual void timeout_async_write() = 0;
 
 
-    //character write interface
-    ///Puts character to an internal buffer
-    /**
-     * @param c character to put
-     * @retval true internal buffer is large enough to be flushed
-     * @retval false internal buffer is still small to be flushed, collect more bytes
-     *
-     * @note Operation is not MT safe in this group, so only one thread can use
-     * character interface at time
-     */
-    virtual bool put(char c) = 0;
-    ///Puts block to an internal buffer
-    /**
-     * @param block block to put
-     * @retval true internal buffer is large enough to be flushed
-     * @retval false internal buffer is still small to be flushed, collect more bytes
-     *
-     * @note Operation is not MT safe in this group, so only one thread can use
-     * character interface at time
-     */
-    virtual bool put(const std::string_view &block) = 0;
-
-    ///Retrieves size of put buffer (already written data)
-    virtual std::size_t get_put_size() const = 0;
-
-    ///Discard content of put buffer
-    /**
-     * @return content of put buffer is returned (it is cleared internally)
-     */
-    virtual std::vector<char> discard_put_buffer() = 0;
-
-    ///Flushes internal buffer to the stream
-    /**
-     * @retval true data are sent
-     * @retval false error detected
-     *
-     * @note this operation is at same level as write_sync and write_async. Internally it
-     * is implemented as passing internal buffer to the function write_sync. Read
-     * the description of this function for further informations
-     *
-     * @note Operation is not MT safe in this group, so only one thread can use
-     * character interface at time
-     */
-
-    virtual bool flush_sync() = 0;
-    ///Flush internal buffer asynchronously
-    /**
-     * @param cb a callback function invoked when operation is complete. The
-     * passed argument contains 'true' as success and 'false' as error
-     * This parametr can be nullptr, in this case, no callback is called
-     *
-     * @note this operation is at same level as write_sync and write_async. Internally it
-     * is implemented as passing internal buffer to the function write_async. Read
-     * the description of this function for further informations
-     *
-     * @note Operation is not MT safe in this group, so only one thread can use
-     * character interface at time
-     */
-    virtual void flush_async(Callback<void(bool)> &&cb) = 0;
-
     //misc
     ///Determines, whether read operation timeouted
     /**
@@ -290,10 +231,6 @@ public:
     void write_async(const std::string_view &buffer, bool copy_content, Callback<void(bool)> &&callback) {(*this)->write_async(buffer, copy_content, std::move(callback));}
     void timeout_async_write() {(*this)->timeout_async_write();}
     void close_output() {(*this)->close_output();}
-    bool put(char c) {return (*this)->put(c);}
-    bool put(const std::string_view &block) {return (*this)->put(block);}
-    bool flush_sync() {return (*this)->flush_sync();}
-    void flush_async(Callback<void(bool)> &&cb) {(*this)->flush_async(std::move(cb));}
     bool timeouted() const {return (*this)->timeouted();}
     void clear_timeout() {(*this)->clear_timeout();}
     void set_read_timeout(int tm_in_ms) {(*this)->set_read_timeout(tm_in_ms);}
@@ -302,7 +239,40 @@ public:
     int get_read_timeout() const {return (*this)->get_read_timeout();}
     int get_write_timeout() const {return (*this)->get_write_timeout();}
     std::size_t get_put_size() const {return (*this)->get_put_size();}
-    std::vector<char> discard_put_buffer() {return (*this)->discard_put_buffer();}
+
+    static std::string_view extract_stream(std::istream &source, std::vector<char> &data) {
+        source.seekg(0, std::ios::end);
+        auto sz = source.tellg();
+        source.seekg(0, std::ios::beg);
+        data.resize(sz);
+        source.read(data.data(),sz);
+        return std::string_view(data.data(), data.size());
+    }
+
+    ///Write async whole input stream
+    /**
+     * @param source source stream. It must be seekable, Function is intended to be used with
+     * std::stringstream
+     *
+     * @param callback callback function called when data are sent. Can be nullptr
+     */
+    void write_async(std::istream &source, Callback<void(bool)> &&callback = nullptr) {
+        std::vector<char> data;
+        write_async(extract_stream(source, data),false, [callback = std::move(callback), data = std::move(data)](bool b) mutable {
+            callback(b);
+        });
+    }
+
+    ///Write sync whole input stream
+    /**
+     * @param source source stream. It must be seekable, Function is intended to be used with
+     * std::stringstream
+     */
+    bool write_sync(std::istream &source) {
+        std::vector<char> data;
+        return write_sync(extract_stream(source, data));
+    }
+
 
     ///Reads line synchronously, lines are separed by a separator
     /**
@@ -411,39 +381,6 @@ public:
     };
 
 
-
-    class FlushHelper {
-    public:
-        operator bool() {
-            auto out = _owner->flush_sync();
-            _owner = nullptr;
-            return out;
-        }
-        template<typename Fn>
-        auto operator>>(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<bool>())) {
-            _owner->flush_async(std::forward<Fn>(fn));
-            _owner = nullptr;
-        }
-        template<typename Fn>
-        auto operator>>(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<Stream_t &>(),std::declval<bool>())) {
-            _owner->flush_async([s = std::move(*_owner), fn = std::forward<Fn>(fn)](bool x) mutable {
-                fn(s, x);
-            });
-            _owner = nullptr;
-        }
-        ~FlushHelper() {
-            if (_owner) _owner->flush_sync();
-        }
-
-    protected:
-        Stream_t *_owner;
-        FlushHelper(Stream_t *owner):_owner(owner) {}
-        FlushHelper(const FlushHelper &other) = delete;
-        FlushHelper &operator=(const FlushHelper &other) = delete;
-        friend class Stream_t;
-    };
-
-
     class ReadBlockHelper{
     public:
 
@@ -484,8 +421,8 @@ public:
         std::size_t _size;
         ReadBlockHelper(Stream_t *owner, std::vector<char> &buffer, std::size_t size)
             :_owner(owner),_buffer(std::move(buffer)),_size(size) {}
-        ReadBlockHelper(const FlushHelper &other) = delete;
-        ReadBlockHelper &operator=(const FlushHelper &other) = delete;
+        ReadBlockHelper(const ReadBlockHelper &other) = delete;
+        ReadBlockHelper &operator=(const ReadBlockHelper &other) = delete;
         friend class Stream_t;
 
     };
@@ -531,26 +468,7 @@ public:
     WriteHelper write(const std::string_view &buffer, bool copy_content = true) {
         return WriteHelper(this, buffer, copy_content);
     }
-    ///Generic flush, you can choose between sync and async version by use
-    /**
-     * @return object can be converted to bool which executes synchronous flush.
-     * You can also use operator >> to forward reading to completion function which executes
-     * asynchronous flush. If none used, synchronous write is finally executed.
-     *
-     * @code
-     *
-     * stream.flush(); //synchronous
-     *
-     * bool ok = stream.flush(); //synchronous
-     *
-     * stream.flush() >> [=](bool ok) { //asynchronous
-     *    ...
-     * };
-     *
-     * stream.flush() >> nullptr;   //asynchronous
-     * @endcode
-     */
-    FlushHelper flush() {return FlushHelper(this);}
+
 
     ///Reads block of specified size
     /**
@@ -586,6 +504,7 @@ public:
     ReadBlockHelper read_block(std::vector<char> &buffer, std::size_t size) {
         return ReadBlockHelper(this, buffer, size);
     }
+
 
 protected:
     static auto find_separator(const std::string_view &text, const std::string_view &separator, std::size_t newdatapos) {

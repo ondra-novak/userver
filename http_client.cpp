@@ -22,10 +22,7 @@ void HttpClientRequest::open(const std::string_view &method, const std::string_v
 	has_te = false;
 	has_te_chunked = false;
 	header_sent = false;
-	s.put(method);
-	s.put(" ");
-	s.put(path);
-	s.put(" HTTP/1.1\r\n");
+    buff << method << " " << path << " HTTP/1.1\r\n";
 	addHeader("Host",host);
 	head_method = HeaderValue::iequal(method, "HEAD");
 	this->host = host;
@@ -33,10 +30,7 @@ void HttpClientRequest::open(const std::string_view &method, const std::string_v
 
 void HttpClientRequest::addHeaderInternal(const std::string_view &key,
 		const std::string_view &value) {
-	s.put(key);
-	s.put(": ");
-	s.put(value);
-	s.put("\r\n");
+    buff << key << ": " << value << "\r\n";
 }
 
 void HttpClientRequest::addHeader(const std::string_view &key,
@@ -106,7 +100,7 @@ Stream& HttpClientRequest::beginBody() {
 int HttpClientRequest::sendSync() {
 	if (!header_sent) finish_headers(false);
 	userStream.reset();
-	s.flush();
+	s.write_sync(buff);
 	if (s.get_line(responseBuffer, "\r\n\r\n") && parseResponse()) {
 		prepareUserStream();
 	} else {
@@ -119,7 +113,7 @@ void HttpClientRequest::finish_headers(bool message) {
 	if (message && !has_te && !send_ctx_len.has_value()) {
 		addHeader("Transfer-Encoding","chunked");
 	}
-	s.put("\r\n");
+	buff << "\r\n";
 	header_sent = true;
 }
 
@@ -145,7 +139,7 @@ void HttpClientRequest::prepareUserStream() {
 void HttpClientRequest::sendAsync(CallbackT<void(int)> &&cb) {
 	if (!header_sent) finish_headers(true);
 	userStream.reset();
-	s.flush()>>[this, cb = std::move(cb)](bool ok) mutable {
+	s.write_async(buff, [this, cb = std::move(cb)](bool ok) mutable {
 		if (!ok) {
 			status = -1;
 			cb(status);
@@ -169,7 +163,7 @@ void HttpClientRequest::sendAsync(CallbackT<void(int)> &&cb) {
 
 			};
 		}
-	};
+	});
 }
 
 Stream& HttpClientRequest::getResponse() {

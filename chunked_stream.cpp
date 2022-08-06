@@ -186,15 +186,6 @@ std::string_view ChunkedStream::read_sync() {
     }
 }
 
-void ChunkedStream::flush_async(Callback<void(bool)> &&cb) {
-    if (write_closed) {
-        cb(false);
-    } else {
-        auto buff = _ref->discard_put_buffer();
-        if (buff.empty()) cb(true); else write_async(std::string_view(buff.data(), buff.size()), true, std::move(cb));
-    }
-}
-
 void ChunkedStream::clear_timeout() {
     _ref->clear_timeout();
 }
@@ -216,13 +207,8 @@ bool ChunkedStream::timeouted() {
 
 void ChunkedStream::close_output() {
     if (!write_closed) {
-        flush_sync();
-        std::promise<bool> p;
-        _ref->write_async("0\r\n\r\n", false, [&](bool){
-            p.set_value(true);
-        });
-        p.get_future().wait();
         write_closed = true;
+        _ref->write_async("0\r\n\r\n", false, nullptr);
     }
 }
 
@@ -234,25 +220,8 @@ void ChunkedStream::set_read_timeout(int tm_in_ms) {
     _ref->set_read_timeout(tm_in_ms);
 }
 
-bool ChunkedStream::flush_sync() {
-    if (write_closed) {
-        return false;
-    } else {
-        auto v = _ref.discard_put_buffer();
-        return write_sync(std::string_view(v.data(), v.size()));
-    }
-}
-
 void ChunkedStream::set_write_timeout(int tm_in_ms) {
     _ref->set_write_timeout(tm_in_ms);
-}
-
-bool ChunkedStream::put(char c) {
-    return _ref->put(c);
-}
-
-bool ChunkedStream::put(const std::string_view &block) {
-    return _ref->put(block);
 }
 
 bool ChunkedStream::write_sync(const std::string_view &buffer) {
@@ -268,12 +237,5 @@ void ChunkedStream::timeout_async_read() {
     _ref->timeout_async_read();
 }
 
-std::size_t ChunkedStream::get_put_size() const {
-    return _ref->get_put_size();
-}
-
-std::vector<char> ChunkedStream::discard_put_buffer() {
-    return _ref->discard_put_buffer();
-}
 
 }

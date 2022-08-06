@@ -89,20 +89,6 @@ std::string_view LimitedStream::read_sync() {
     }
 }
 
-void LimitedStream::flush_async(Callback<void(bool)> &&cb) {
-    auto sz = _ref.get_put_size();
-    if ((write_limit -= sz) < 0) {
-        write_limit += sz;
-        try {
-            _ref.discard_put_buffer();
-            throw_write_limit_error();
-        } catch (...) {
-            cb(false);
-        }
-    } else {
-        _ref.flush_async(std::move(cb));
-    }
-}
 
 void LimitedStream::clear_timeout() {
     _ref.clear_timeout();
@@ -123,7 +109,6 @@ bool LimitedStream::timeouted() {
 }
 
 void LimitedStream::close_output() {
-    flush_sync();
     if (write_limit) {
         char buff[4096];
         for (char &c: buff) c = fill_char;
@@ -142,32 +127,15 @@ void LimitedStream::set_read_timeout(int tm_in_ms) {
     _ref.set_read_timeout(tm_in_ms);
 }
 
-bool LimitedStream::flush_sync() {
-    auto sz = _ref.get_put_size();
-    if ((write_limit -= sz) < 0) {
-        write_limit += sz;
-        _ref.discard_put_buffer();
-       throw_write_limit_error();
-    }
-    return _ref.flush_sync();
-}
 
 void LimitedStream::set_write_timeout(int tm_in_ms) {
     _ref.set_write_timeout(tm_in_ms);
 }
 
-bool LimitedStream::put(char c) {
-    return _ref.put(c);
-}
-
-bool LimitedStream::put(const std::string_view &block) {
-    return _ref.put(block);
-}
 
 bool LimitedStream::write_sync(const std::string_view &buffer) {
-    if ((write_limit+=buffer.size()) < 0) {
+    if ((write_limit-=buffer.size()) < 0) {
         write_limit += buffer.size();
-        _ref.discard_put_buffer();
        throw_write_limit_error();
     }
     return _ref.write_sync(buffer);
@@ -178,13 +146,6 @@ void LimitedStream::timeout_async_read() {
     return _ref.timeout_async_read();
 }
 
-std::size_t LimitedStream::get_put_size() const {
-    return _ref.get_put_size();
-}
-
-std::vector<char> LimitedStream::discard_put_buffer() {
-    return _ref.discard_put_buffer();
-}
 
 void LimitedStream::throw_write_limit_error() {
     throw std::runtime_error("LimitedStream write beyond of limit");

@@ -38,7 +38,6 @@ public:
     virtual int get_read_timeout() const override;
     virtual std::string_view read_sync() override;
     virtual std::string_view read_sync_nb() override;
-    virtual void flush_async(userver::Callback<void(bool)> &&cb) override;
     virtual void clear_timeout() override;
     virtual int get_write_timeout() const override;
     virtual void close_input() override;
@@ -46,14 +45,9 @@ public:
     virtual void close_output() override;
     virtual void set_rw_timeout(int tm_in_ms) override;
     virtual void set_read_timeout(int tm_in_ms) override;
-    virtual bool flush_sync() override;
     virtual void set_write_timeout(int tm_in_ms) override;
-    virtual bool put(char c) override;
-    virtual bool put(const std::string_view &block) override;
     virtual bool write_sync(const std::string_view &buffer) override;
     virtual void timeout_async_read() override;
-    virtual std::size_t get_put_size() const override;
-    virtual std::vector<char> discard_put_buffer() override;
     virtual std::size_t get_pending_write_size() const override {
     	return _ref->get_pending_write_size();
     }
