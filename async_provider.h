@@ -249,13 +249,10 @@ struct AsyncProviderConfig {
      * the dispatcher with zero threads and then creates own set of threads
      */
     unsigned int threads = 0;
+    ///install scheduler
+    bool scheduler = true;
     ///force to use poll (default is epoll), for Windows WSAPoll is always used
     bool use_poll = false;
-    ///install scheduler
-    /** Scheduler needs extra thread. It is default false for compatibility reason. You need
-     * to enable scheduler to use At and After classes
-     */
-    bool scheduler = false;
 
 };
 

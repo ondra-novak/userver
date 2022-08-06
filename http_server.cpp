@@ -529,7 +529,9 @@ Stream HttpServerRequest::send() {
 		//this request cannot be kept alive, because body will not be read
 		enableKeepAlive = false;
 	}
-	bool nocontent = statusCode == 204 || statusCode == 304;
+
+	//there is no content for 204 (no content), 304 (not modified) and 101 (switching protocols)
+	bool nocontent = statusCode == 204 || statusCode == 304 || statusCode == 101;
 	if (!nocontent) {
 		if (!has_content_type) {
 			set("Content-Type","application/octet-stream");
@@ -564,7 +566,9 @@ Stream HttpServerRequest::send() {
 	buff.str(std::string());
 	response_sent = true;
 	if (logger) logger->log(ReqEvent::header_sent,*this);
-	if (nocontent || method == "HEAD" ) {
+	if (statusCode == 101) { //for switching protocol, we giving out the underlying stream
+	    return std::move(stream); //this also prevents any keepAlive attempt
+	} else if (nocontent || method == "HEAD" ) {
 		return Stream(std::make_unique<LimitedStream>(*stream, 0, 0));
 	} else if (has_transfer_encoding_chunked) {
 		return Stream(std::make_unique<ChunkedStream>(*stream, maxChunkSize,false));
@@ -1038,7 +1042,7 @@ void HttpServer::unhandled() noexcept {
 
 void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
 	req->setLogger(PLogger::staticCast(logger));
-	s.read() >> [this, req = std::move(req)](Stream &s, const std::string_view &data) mutable {
+	s.read() >> [this, req = std::move(req), s = std::move(s)](const std::string_view &data) mutable {
 		if (!data.empty()) {
 			s.put_back(data);
 			HttpServerRequest *preq = req.get();

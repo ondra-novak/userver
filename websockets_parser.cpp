@@ -113,7 +113,7 @@ void WebSocketParser::epilog(){
 
 
 bool WebSocketParser::isComplete() const {
-	return ftype != WSFrameType::incomplete;
+	return ftype != WSFrameType::incomplete && ftype != WSFrameType::init;
 }
 
 WSFrameType WebSocketParser::getFrameType() const {
@@ -170,18 +170,18 @@ std::string_view WebSocketSerializer::forgeFrame(int opcode, const std::string_v
 		--i;
 		frameData.push_back((data.length()>>(i*8)) & 0xFF);
 	}
-	unsigned char masking[4];
+	unsigned char mask_bytes[4];
 	if (masking) {
 		for (unsigned char i = 0; i < 4; ++i) {
-			masking[i] = (unsigned char)rnd() & 0xFF;
-			frameData.push_back(masking[i]);
+			mask_bytes[i] = (unsigned char)rnd() & 0xFF;
+			frameData.push_back(mask_bytes[i]);
 		}
 	} else {
-		for (unsigned char i = 0; i < 4; ++i) masking[i] = 0;
+		for (unsigned char i = 0; i < 4; ++i) mask_bytes[i] = 0;
 	}
 
 	for (std::size_t i = 0; i < data.length(); ++i) {
-		frameData.push_back(masking[i & 0x3] ^ data[i]);
+		frameData.push_back(mask_bytes[i & 0x3] ^ data[i]);
 	}
 
 

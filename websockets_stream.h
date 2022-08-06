@@ -65,6 +65,12 @@ public:
 
 
     WSStream(Stream &&s, bool client);
+    /**
+     * @param other moves instance to the different object
+     *
+     * @note, you can move instance until it is used for the first time! When there are
+     * pending operations, moving instance causes undefined behavior
+     */
     WSStream(WSStream &&other);
     ~WSStream();
 
@@ -82,7 +88,7 @@ public:
      * If stream timeouts, WSFrameType::incomplete is returned. The message doesn't contain
      * data.
      */
-    ReadHelper recv();
+    ReadHelper recv() {return ReadHelper(*this);}
 
     ///Reads message synchronously
     /**
@@ -201,6 +207,15 @@ public:
      */
     std::future<bool> flush();
 
+    ///Flushes asynchronously
+    /**
+     * For more information, see flush(). This function allows to perform flush
+     * asynchronously, which means, that it calls callback, when flush is done
+     * @param cb
+     */
+    template<typename Fn>
+    void flush_async(Fn &&cb);
+
     ///Determines, whether reading timeouted. You can check this status after WSFrameType::incomplete is received
     /**
      * @retval true timeouted
@@ -271,7 +286,7 @@ inline void WSStream::recv_async(Fn &&fn) {
                     Message m = get_message();
                     handle_special_message(m);
                     _parser.reset();
-                    fn(m);
+                    fn(std::move(m));
                 } else {
                     recv_async(std::forward<Fn>(fn));
                 }
@@ -288,7 +303,7 @@ inline void WSStream::recv_async_loop(Fn &&fn) {
 template<typename Fn>
 inline void WSStream::recv_async_loop2(Fn &&fn, bool ping_sent) {
     auto stream = _s.get();
-    recv() >> [=, fn = std::forward<Fn>(fn)](Message &msg) mutable { //not const for purpose
+    recv() >> [=, fn = std::forward<Fn>(fn)](Message &&msg) mutable {
         do {
             //examine message
             switch (msg.type) {
@@ -408,6 +423,12 @@ inline std::future<bool> WSStream::flush() {
     return future;
 }
 
+template<typename Fn>
+void WSStream::flush_async(Fn &&cb) {
+    _s.write_async(std::string_view(), false, std::forward<Fn>(cb));
+}
+
+
 inline bool WSStream::timeouted() const {
     return _close_code.load() == 0 && _s.timeouted();
 }
@@ -444,6 +465,16 @@ inline void WSStream::handle_special_message(const Message &msg) {
     default:
         break;
     };
+}
+
+inline WSStream::WSStream(Stream &&s, bool client)
+:_serializer(client),_s(std::move(s))  {}
+
+inline WSStream::WSStream(WSStream &&other)
+: _parser(std::move(other._parser))
+, _serializer(std::move(other._serializer))
+, _s(std::move(other._s))
+{
 }
 
 inline void WSStream::finish_write(bool ok) {

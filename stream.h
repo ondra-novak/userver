@@ -259,7 +259,7 @@ public:
     void write_async(std::istream &source, Callback<void(bool)> &&callback = nullptr) {
         std::vector<char> data;
         write_async(extract_stream(source, data),false, [callback = std::move(callback), data = std::move(data)](bool b) mutable {
-            callback(b);
+            if (callback != nullptr) callback(b);
         });
     }
 
@@ -329,17 +329,10 @@ public:
             _owner->read_async(std::forward<Fn>(fn));
             _owner = nullptr;
         }
-        template<typename Fn>
-        auto operator>>(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<Stream_t &>(),std::declval<std::string_view>())) {
-            _owner->read_async([s = std::move(*_owner), fn = std::forward<Fn>(fn)](const std::string_view &data) mutable {
-                fn(s, data);
-            });
-            _owner = nullptr;
-        }
 
     protected:
-        Stream_t *_owner;
-        ReadHelper(Stream_t *owner):_owner(owner) {}
+        typename PtrType::pointer _owner;
+        ReadHelper(const Stream_t &owner):_owner(owner.get()) {}
         ReadHelper(const ReadHelper &other) = delete;
         ReadHelper &operator=(const ReadHelper &other) = delete;
         friend class Stream_t;
@@ -357,22 +350,15 @@ public:
             _owner->write_async(_buffer, _copy_content, std::forward<Fn>(fn));
             _owner = nullptr;
         }
-        template<typename Fn>
-        auto operator>>(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<Stream_t &>(),std::declval<bool>())) {
-            _owner->read_async([s = std::move(*_owner), fn = std::forward<Fn>(fn)](bool x) mutable {
-                fn(s, x);
-            });
-            _owner = nullptr;
-        }
         ~WriteHelper() {
             if (_owner) _owner->write_sync(_buffer);
         }
     protected:
-        Stream_t *_owner;
+        typename PtrType::pointer _owner;
         std::string_view _buffer;
         bool _copy_content;
-        WriteHelper(Stream_t *owner, const std::string_view &buffer, bool copy_content)
-            :_owner(owner)
+        WriteHelper(const Stream_t &owner, const std::string_view &buffer, bool copy_content)
+            :_owner(owner.get())
             ,_buffer(buffer)
             ,_copy_content(copy_content) {}
         WriteHelper(const WriteHelper &other) = delete;
@@ -402,25 +388,17 @@ public:
             _owner->read_block_async(_size, std::move(_buffer), std::forward<Fn>(fn));
             _owner = nullptr;
         }
-        template<typename Fn>
-        auto operator>>(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<Stream_t &>(),std::declval<bool>(),std::declval<std::vector<char> &>())) {
-            _owner->read_block_async(_size, std::move(_buffer),
-                        [s = std::move(*_owner),fn = std::forward<Fn>(fn)](bool ok, std::vector<char> &buffer) mutable{
-                fn(s, ok, buffer);
-            });
-            _owner = nullptr;
-        }
         ~ReadBlockHelper() {
             _owner && (*this);
         }
 
 
     protected:
-        Stream_t *_owner;
+        typename PtrType::pointer _owner;
         std::vector<char> &_buffer;
         std::size_t _size;
-        ReadBlockHelper(Stream_t *owner, std::vector<char> &buffer, std::size_t size)
-            :_owner(owner),_buffer(std::move(buffer)),_size(size) {}
+        ReadBlockHelper(const Stream_t &owner, std::vector<char> &buffer, std::size_t size)
+            :_owner(owner.get()),_buffer(std::move(buffer)),_size(size) {}
         ReadBlockHelper(const ReadBlockHelper &other) = delete;
         ReadBlockHelper &operator=(const ReadBlockHelper &other) = delete;
         friend class Stream_t;
@@ -441,7 +419,7 @@ public:
      * };
      * @endcode
      */
-    ReadHelper read() {return ReadHelper(this);}
+    ReadHelper read() {return ReadHelper(*this);}
     ///Generic write, you can choose between sync and async version by use
     /**
      * @param buffer buffer to write
@@ -466,7 +444,7 @@ public:
      * @endcode
      */
     WriteHelper write(const std::string_view &buffer, bool copy_content = true) {
-        return WriteHelper(this, buffer, copy_content);
+        return WriteHelper(*this, buffer, copy_content);
     }
 
 
