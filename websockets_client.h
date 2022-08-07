@@ -52,7 +52,7 @@ void wsConnectAsync(HttpClient &httpclient, const HttpClient::URL &url, Fn &&cal
 				} else if (req->get("Upgrade") != "websocket") {
 					callback(-1,ws);
 				} else {
-				    ws.emplace(std::move(req->getStream()), true);
+				    ws.emplace(WSStream(std::move(req->getStream()), true));
 					callback(status, ws);
 				}
 

@@ -331,7 +331,7 @@ public:
         }
 
     protected:
-        typename PtrType::pointer _owner;
+        typename PtrType::element_type * _owner;
         ReadHelper(const Stream_t &owner):_owner(owner.get()) {}
         ReadHelper(const ReadHelper &other) = delete;
         ReadHelper &operator=(const ReadHelper &other) = delete;
@@ -354,7 +354,7 @@ public:
             if (_owner) _owner->write_sync(_buffer);
         }
     protected:
-        typename PtrType::pointer _owner;
+        typename PtrType::element_type * _owner;
         std::string_view _buffer;
         bool _copy_content;
         WriteHelper(const Stream_t &owner, const std::string_view &buffer, bool copy_content)
@@ -394,7 +394,7 @@ public:
 
 
     protected:
-        typename PtrType::pointer _owner;
+        typename PtrType::element_type * _owner;
         std::vector<char> &_buffer;
         std::size_t _size;
         ReadBlockHelper(const Stream_t &owner, std::vector<char> &buffer, std::size_t size)

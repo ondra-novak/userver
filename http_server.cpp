@@ -360,8 +360,10 @@ HttpServerRequest::~HttpServerRequest() {
 			}
 			stream.write_async(buff,nullptr);
 			buff.str(std::string());
-			if (logger) logger->log(ReqEvent::done,*this);
+			if (logger && valid) logger->log(ReqEvent::done,*this);
 			if (enableKeepAlive && !hasBody && klcb != nullptr) klcb(stream, *this);
+		} else {
+		    if (logger && valid) logger->log(ReqEvent::done,*this);
 		}
 	} catch (...) {
 

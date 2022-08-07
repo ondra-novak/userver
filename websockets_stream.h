@@ -14,6 +14,7 @@
 
 namespace userver {
 
+class WSStream_Impl;
 
 ///Wraps stream to websocket stream allowing to send or receive message
 /**
@@ -28,56 +29,132 @@ namespace userver {
  * wait to empty this buffer
  *
  * Destruction of the stream ends all pending operations. Destructor blocks thread
- * until all pending operation completes (mostly unsuccessful). It also beaks receive
- * loop, if there is such active. Enequeued messages are not sent during destruction
+ * until all pending operation completes (mostly unsuccessful). It also breaks receive
+ * loop, if there is such active. Enqueued messages are not sent during destruction
  * (there is no linger). If you need to ensure, that all data has been sent, you
  * need wait manually, for example using flush() and then destroy the stream. It is also
  * good idea to inform other side about closing the stream before it is being closed.
+ *
+ * Stream available as WSStream or SharedWSStream, depend on how it is used. You can
+ * call make_shared() to convert WSStream to SharedWSStream. This interface is
+ * in fact implemented as a smart pointer, and actual implementation is in
+ * WSStream_Impl, which is inaccessible directly. WSStream can be moved as needed
  */
-class WSStream: public WebSocketsConstants {
+
+template<typename PtrImpl>
+class WSStreamT: protected PtrImpl, public WebSocketsConstants {
 public:
 
-    struct Message {
-        ///frame type
-        WSFrameType type;
-        ///frame data
-        std::string_view data;
-        ///code associated with the frame
-        /** It is applied only for certain types of frame, otherwise it is zero */
-        unsigned int code;
-    };
+    using PtrImpl::PtrImpl;
 
-    class ReadHelper final {
+    ///Construct WSStream from existing Stream
+    /**
+     * @param stream Stream object. Must be Stream, not SharedStream
+     * @param client set true, if you create a client connection (connect), set false if it is
+     *    server connection (accept). This is required as RFC states, client connection
+     *    have to mask messages, on other hand server connection must not mask messages.
+     */
+    WSStreamT(Stream &&stream, bool client);
+
+    ///Converts WSStream to SharedWSStream
+    /**
+     * It is available for both WSStream an SharedWSStream, while WSStream moves
+     * instance to newly created SharedWSStream, while SharedWSStream only copy
+     * instance to make new reference. Please note that it is still necessary to comply
+     * with MT Safety requirements. Only one thread can read messages regardless on how many
+     * times the instance is shared
+     *
+     * @return shared stream
+     */
+    WSStreamT<std::shared_ptr<WSStream_Impl> > make_shared();
+
+
+    using Message = WSMessage;
+
+    ///Helps with recv()
+    /**
+     * @see recv
+     */
+    class RecvHelper final {
     public:
-        ReadHelper(WSStream &owner):owner(owner) {}
-        ReadHelper(const ReadHelper &) = default;
-        ReadHelper &operator=(const ReadHelper &) = delete;
+        RecvHelper(WSStreamT &owner):_owner(owner.get()) {}
+        RecvHelper(const RecvHelper &) = delete;
+        RecvHelper &operator=(const RecvHelper &) = delete;
 
         operator Message() const {
-            return owner.recv_sync();
+            return _owner->recv_sync();
         }
         template<typename Fn> void operator>>(Fn &&fn) {
-            owner.recv_async(std::forward<Fn>(fn));
+            _owner->recv_async(std::forward<Fn>(fn));
         }
     protected:
-        WSStream &owner;
+        typename PtrImpl::element_type *_owner;
+    };
+
+    ///Helps with recv_loop()
+    /**
+     * @see recv_loop
+     */
+    class RecvLoopHelper final {
+    public:
+        RecvLoopHelper(WSStreamT &owner):_owner(owner.get()) {}
+        RecvLoopHelper(const RecvLoopHelper &) = delete;
+        RecvLoopHelper &operator=(const RecvLoopHelper &) = delete;
+
+        template<typename Fn> void operator>>(Fn &&fn) {
+            _owner->recv_async_loop(std::forward<Fn>(fn));
+        }
+    protected:
+        typename PtrImpl::element_type *_owner;
     };
 
 
-    WSStream(Stream &&s, bool client);
+    ///Helps with flush()
     /**
-     * @param other moves instance to the different object
-     *
-     * @note, you can move instance until it is used for the first time! When there are
-     * pending operations, moving instance causes undefined behavior
+     * @see flush
      */
-    WSStream(WSStream &&other);
-    ~WSStream();
+    class FlushHelper final {
+    public:
+        FlushHelper(WSStreamT &owner):_owner(owner.get()) {}
+        FlushHelper(const FlushHelper &) = delete;
+        FlushHelper &operator=(const FlushHelper &) = delete;
 
+        template<typename Fn> void operator>>(Fn &&fn) {
+            _owner->flush_async(std::forward<Fn>(fn));
+            _owner = nullptr;
+        }
+        operator std::promise<bool>() {
+            auto r = flush_sync();
+            _owner = nullptr;
+            return r;
+        }
+        operator bool() {
+            auto r = flush_sync();
+            _owner = nullptr;
+            return r.get();
+        }
+
+        ~FlushHelper() {
+            if (_owner) {
+                flush_sync().get();
+            }
+        }
+    protected:
+        std::future<bool> flush_sync() {
+            std::promise<bool> p;
+            auto f = p.get_future();
+            _owner->flush_async([p = std::move(p)](bool ok) mutable {
+               p.set_value(ok);
+            });
+            return f;
+        }
+        typename PtrImpl::element_type *_owner;
+
+    };
 
     ///Read the next message
     /**
-     * @return ReadHelper object which can be converted to Message,
+     * @return RecvHelper object which can be converted to Message,
      * which causes synchronous reading, or by chaining callback causes asynchronous
      * reading.
      *
@@ -87,49 +164,41 @@ public:
      *
      * If stream timeouts, WSFrameType::incomplete is returned. The message doesn't contain
      * data.
+     *
+     * @code
+     * WSStream ws = .....
+     * WSMessage msh = ws.recv(); //sync reading
+     *
+     * ws.recv() >> [=](WSMessage &&msg) {
+     *    //.... async reading
+     * };
+     * @endcode
+     *
      */
-    ReadHelper recv() {return ReadHelper(*this);}
+    RecvHelper recv() {return RecvHelper(*this);}
 
-    ///Reads message synchronously
+    ///Read the messages in a loop
     /**
-     * @return block and returns message, when it is received. In case of timeout,
-     * WSFrameType::incomplete is returned. In case of reset, WSFrameType::connClose
-     * is returned with reason closeConnReset
+     * @return RecvHelper which helps to chain a callback lambda function
      *
-     * When special message is read, it is automatically handled. For example, if ping
-     * message is read, it is automatically responded with pong message. The same for
-     * close message
+     * Calback function is called for every received message. Automatically handles ping,
+     * pong and close messages. The callback function must return true to continue
+     * in loop or false to break the loop. Receiving close message breaks loop regadless
+     * on return value.
      *
-     * @note Function is not MT Safe for receiving. Only one thread can call this function.
-     * It is also not possible to use recvSync while recvAsync is still pending, this
-     * results as undefined behavior
-     */
-    Message recv_sync();
-
-    ///Reads message asynchronously
-    /**
-     * @param fn a callback function which receives Message. see recvSync() for description
-     * of various messages
+     * @code
+     * // WS echo service
      *
-     * @note Function is not MT Safe for receiving. Only one thread can call this function.
-     * Function can be called only if there is no other pending receiving including
-     * recvSync(), otherwise results as undefined behavior
+     * WSStream ws = .....
+     * ws.recv_loop() >> [ws = std::move(ws)](WSMessage &&msg){
+     *      if (msg.type == WSFrameType::text) {
+     *          ws.send_text(msg.data);
+     *      }
+     * };
+     * @endcode
      *
      */
-    template<typename Fn>
-    void recv_async(Fn &&fn);
-
-
-    ///Reads messages in a loop
-    /**
-     * @param fn a callback function which receives Message. It can return true to continue
-     * loop, or false to exit loop. Automatically handles ping/pong messages, so these
-     * messages wouldn't be passed to the callback function. If the connection is closed,
-     * then WSFrameType::connClose is passed to the callback function. In this case,
-     * return value is ignored and loop is exited
-     */
-    template<typename Fn>
-    void recv_async_loop(Fn &&fn);
+    RecvLoopHelper recv_loop() {return RecvLoopHelper(*this);}
 
     ///Sends text frame
     /**
@@ -139,7 +208,9 @@ public:
      *
      * @note MT Safety - function is MT Safe.
      */
-    bool send_text(const std::string_view &data);
+    bool send_text(const std::string_view &data) {
+        return this->get()->send_text(data);
+    }
 
     ///Sends binary frame
     /**
@@ -149,7 +220,9 @@ public:
      *
      * @note MT Safety - function is MT Safe
      */
-    bool send_binary(const std::string_view &data);
+    bool send_binary(const std::string_view &data) {
+        return this->get()->send_binary(data);
+    }
 
     ///Sends ping frame
     /**
@@ -159,7 +232,9 @@ public:
      *
      * @note MT Safety - function is MT Safe
      */
-    bool send_ping(const std::string_view &data = std::string_view());
+    bool send_ping(const std::string_view &data = std::string_view()) {
+        return this->get()->send_ping(data);
+    }
 
     ///Sends pong frame
     /**
@@ -169,7 +244,9 @@ public:
      *
      * @note MT Safety - function is MT Safe
      */
-    bool send_pong(const std::string_view &data);
+    bool send_pong(const std::string_view &data) {
+        return this->get()->send_pong(data);
+    }
 
     ///Request to close connection
     /**
@@ -179,7 +256,9 @@ public:
      *
      * @note MT Safety - function is MT Safe
      */
-    bool send_close(int code = closeNormal);
+    bool send_close(int code = closeNormal) {
+        return this->get()->send_close(code);
+    }
 
 
     ///Retrieves buffered amount of bytes
@@ -190,43 +269,83 @@ public:
      * This value does not reset to zero when the connection is closed;
      * if you keep calling send_xxx(), this will continue to climb.
      */
-    std::size_t get_buffered_amount() const;
+    std::size_t get_buffered_amount() const {
+        return this->get()->get_buffered_amount();
+    }
 
-    ///Creates future, which is resolved, one the output buffer is emptied
+    ///Flush the output stream
     /**
-     * @return future. The future resolves by true, if the flush completed, or false, if
-     * the flush failed, because stream is in disconnected/timeouted state. It also resolves
-     * as false in case, that stream is being destroyed
+     * Note all sent messages are automatically processed by network, so no
+     * explicit flushing is necessery. However you often need to slow down sending
+     * or receive notification about certain data has been processed by network (so
+     * they no longer sit in output buffer). This function can handle operation
+     * by either synchronously or asynchronously
      *
-     * @note MT Safety - function is MT Safe
      *
-     * @note If there are additional sends after the future is created, they are not
-     * counted in. So the future becomes resolved once the buffered amount bytes
-     * known in time of future creation is written to the network regardless on
-     * how many bytes has been enqueued later
+     * @return FlushHelper, you can chain a lambda function or not
+     *
+     * @code
+     * WSStream ws = ..
+     * ws.flush();   //flush synchronously
+     * bool res = ws.flush(); //flush synchronously, retrieve a result (success or failure)
+     * std::future<bool> = ws.flush(); //flush asynchronously, receive future
+     * ws.flush() >> [](bool ok){...}; //flush asynchronously, call the lambda function on completion
+     * @endcode
      */
-    std::future<bool> flush();
-
-    ///Flushes asynchronously
-    /**
-     * For more information, see flush(). This function allows to perform flush
-     * asynchronously, which means, that it calls callback, when flush is done
-     * @param cb
-     */
-    template<typename Fn>
-    void flush_async(Fn &&cb);
+    FlushHelper flush() {
+        return FlushHelper(*this);
+    }
 
     ///Determines, whether reading timeouted. You can check this status after WSFrameType::incomplete is received
     /**
      * @retval true timeouted
      * @retval false not timeouted
      */
-    bool timeouted() const;
+    bool timeouted() const {
+        return this->get()->timeouted();
+    }
 
     ///Clears timeout flag
     /**
      * You need to clear timeout if you want to continue in reading after stream timeouted
      */
+    void clear_timeout() {
+        this->get()->clear_timeout();
+    }
+
+    friend class WeakWSStreamRef;
+
+    WSStreamT(PtrImpl &&imp): PtrImpl(std::move(imp)) {}
+
+
+};
+
+class WSStream_Impl: public WebSocketsConstants {
+public:
+
+
+    using Message = WSMessage;
+
+
+
+    WSStream_Impl(Stream &&s, bool client);
+    WSStream_Impl(WSStream_Impl &&other);
+    ~WSStream_Impl();
+    Message recv_sync();
+    template<typename Fn>
+    void recv_async(Fn &&fn);
+    template<typename Fn>
+    void recv_async_loop(Fn &&fn);
+    bool send_text(const std::string_view &data);
+    bool send_binary(const std::string_view &data);
+    bool send_ping(const std::string_view &data = std::string_view());
+    bool send_pong(const std::string_view &data);
+    bool send_close(int code = closeNormal);
+    std::size_t get_buffered_amount() const;
+    std::future<bool> flush();
+    template<typename Fn>
+    void flush_async(Fn &&cb);
+    bool timeouted() const;
     void clear_timeout();
 
 protected:
@@ -234,8 +353,10 @@ protected:
 
     WebSocketParser _parser;
     WebSocketSerializer _serializer;
-    std::mutex _serializer_lock;
+    mutable std::recursive_mutex _mx;
     std::atomic<unsigned int> _close_code = 0;
+    std::vector<char> _buffer;
+    bool _pending_write = false;
     Stream _s;
 
 
@@ -247,14 +368,50 @@ protected:
     void recv_async_loop2(Fn &&fn, bool ping_sent);
 
     void finish_write(bool ok);
+    bool send_frame(const std::string_view &frame);
 
 };
 
 
+using WSStream = WSStreamT<std::unique_ptr<WSStream_Impl> >;
+using SharedWSStream = WSStreamT<std::shared_ptr<WSStream_Impl> >;
+
+///Held weak reference to WSStream. You need to lock to obtain WSStream.
+class WeakWSStreamRef {
+public:
+    WeakWSStreamRef(const SharedWSStream &s):_ptr(s) {}
+    ///Locks the stream, retrieves SharedWSStream
+    /**
+     * @param target empty object SharedWSStream (uninitialized)
+     * @retval true lock successful
+     * @retval false stream no longer available
+     */
+    bool lock(SharedWSStream &target)  const{
+        auto p = _ptr.lock();
+        if (p != nullptr) {
+            target = SharedWSStream(std::move(p));
+            return true;
+        } else {
+            return false;
+        }
+    }
+    ///Determines, whether stream has been closed
+    /**
+     * @retval true, stream has been closed
+     * @retval false, stream is not closed - note this information doesn't mean, that
+     * stream is still opened. You need to call lock() to be sure
+     */
+    bool expired() const {
+        return _ptr.expired();
+    }
+
+protected:
+    std::weak_ptr<WSStream_Impl> _ptr;
+};
 
 
-inline WSStream::Message WSStream::recv_sync() {
-    if (_close_code.load()) {
+inline WSStream_Impl::Message WSStream_Impl::recv_sync() {
+    if (_close_code.load(std::memory_order_relaxed)) {
         return get_close_message();
     }
     do {
@@ -273,8 +430,8 @@ inline WSStream::Message WSStream::recv_sync() {
 }
 
 template<typename Fn>
-inline void WSStream::recv_async(Fn &&fn) {
-    if (_close_code.load()) {
+inline void WSStream_Impl::recv_async(Fn &&fn) {
+    if (_close_code.load(std::memory_order_relaxed)) {
         fn(get_close_message());
     } else {
         _s.read() >> [=, fn = std::forward<Fn>(fn)](const std::string_view &data) mutable {
@@ -296,14 +453,14 @@ inline void WSStream::recv_async(Fn &&fn) {
 }
 
 template<typename Fn>
-inline void WSStream::recv_async_loop(Fn &&fn) {
+inline void WSStream_Impl::recv_async_loop(Fn &&fn) {
     recv_async_loop2(std::forward<Fn>(fn), false);
 }
 
 template<typename Fn>
-inline void WSStream::recv_async_loop2(Fn &&fn, bool ping_sent) {
+inline void WSStream_Impl::recv_async_loop2(Fn &&fn, bool ping_sent) {
     auto stream = _s.get();
-    recv() >> [=, fn = std::forward<Fn>(fn)](Message &&msg) mutable {
+    recv_async([=, fn = std::forward<Fn>(fn)](Message &&msg) mutable {
         do {
             //examine message
             switch (msg.type) {
@@ -314,7 +471,7 @@ inline void WSStream::recv_async_loop2(Fn &&fn, bool ping_sent) {
                     if (timeouted()) {
                         if (ping_sent) {
                             unsigned int need = 0;
-                            _close_code.compare_exchange_strong(need, closeConnTimeout);
+                            _close_code.compare_exchange_strong(need, closeConnTimeout, std::memory_order_relaxed);
                             fn(get_close_message());
                         } else {
                             clear_timeout();
@@ -323,7 +480,7 @@ inline void WSStream::recv_async_loop2(Fn &&fn, bool ping_sent) {
                         }
                     } else {
                         unsigned int need = 0;
-                        _close_code.compare_exchange_strong(need, closeConnReset);
+                        _close_code.compare_exchange_strong(need, closeConnReset, std::memory_order_relaxed);
                         fn(get_close_message());
                     }
                     return;
@@ -352,93 +509,61 @@ inline void WSStream::recv_async_loop2(Fn &&fn, bool ping_sent) {
             handle_special_message(msg);
             //continue by examining message
         }while (true);
-    };
+    });
 }
 
-inline bool WSStream::send_text(const std::string_view &data) {
-    std::lock_guard _(_serializer_lock);
-    if (!_close_code) {
-        _s.write_async(_serializer.forgeTextFrame(data),true,
-                       Callback<void(bool)>(this,&WSStream::finish_write));
-        return true;
-    } else {
-        return false;
-    }
+inline bool WSStream_Impl::send_text(const std::string_view &data) {
+    std::lock_guard _(_mx);
+    return send_frame(_serializer.forgeTextFrame(data));
 }
 
-inline bool WSStream::send_binary(const std::string_view &data) {
-    std::lock_guard _(_serializer_lock);
-    if (!_close_code) {
-        _s.write_async(_serializer.forgeBinaryFrame(data),true,
-                       Callback<void(bool)>(this,&WSStream::finish_write));
-        return true;
-    } else {
-        return false;
-    }
+inline bool WSStream_Impl::send_binary(const std::string_view &data) {
+    std::lock_guard _(_mx);
+    return send_frame(_serializer.forgeBinaryFrame(data));
 }
 
-inline bool WSStream::send_ping(const std::string_view &data) {
-    std::lock_guard _(_serializer_lock);
-    if (!_close_code) {
-        _s.write_async(_serializer.forgePingFrame(data),true,
-                       Callback<void(bool)>(this,&WSStream::finish_write));
-        return true;
-    } else {
-        return false;
-    }
+inline bool WSStream_Impl::send_ping(const std::string_view &data) {
+    std::lock_guard _(_mx);
+    return send_frame(_serializer.forgePingFrame(data));
 }
 
-inline bool WSStream::send_pong(const std::string_view &data) {
-    std::lock_guard _(_serializer_lock);
-    if (!_close_code) {
-        _s.write_async(_serializer.forgePongFrame(data),true,
-                       Callback<void(bool)>(this,&WSStream::finish_write));
-        return true;
-    } else {
-        return false;
-    }
+inline bool WSStream_Impl::send_pong(const std::string_view &data) {
+    std::lock_guard _(_mx);
+    return send_frame(_serializer.forgePongFrame(data));
 }
 
-inline bool WSStream::send_close(int code) {
-    std::lock_guard _(_serializer_lock);
-    if (!_close_code) {
-        _s.write_async(_serializer.forgeCloseFrame(code),true,
-                       Callback<void(bool)>(this,&WSStream::finish_write));
-        return true;
-    } else {
-        return false;
-    }
+inline bool WSStream_Impl::send_close(int code) {
+    std::lock_guard _(_mx);
+    return send_frame(_serializer.forgeCloseFrame(code));
 }
 
-inline std::size_t WSStream::get_buffered_amount() const {
-    return _s->get_pending_write_size();
-}
-
-inline std::future<bool> WSStream::flush() {
-    std::promise<bool> promise;
-    std::future<bool> future = promise.get_future();
-    _s.write(std::string_view(), false) >> [promise = std::move(promise)](bool ok) mutable {
-        promise.set_value(ok);
-    };
-    return future;
+inline std::size_t WSStream_Impl::get_buffered_amount() const {
+    std::lock_guard _(_mx);
+    return _s->get_pending_write_size() + _buffer.size();
 }
 
 template<typename Fn>
-void WSStream::flush_async(Fn &&cb) {
-    _s.write_async(std::string_view(), false, std::forward<Fn>(cb));
+void WSStream_Impl::flush_async(Fn &&cb) {
+    std::lock_guard _(_mx);
+    std::string_view dt(_buffer.data(), _buffer.size());
+    _s.write_async(dt, false, [=, b = std::move(_buffer), cb = std::move(cb)](bool ok) mutable {
+        unsigned int zero = 0;
+        if (!ok) _close_code.compare_exchange_strong(zero, closeConnReset,std::memory_order_relaxed);
+        cb(ok);
+    });
 }
 
 
-inline bool WSStream::timeouted() const {
+inline bool WSStream_Impl::timeouted() const {
     return _close_code.load() == 0 && _s.timeouted();
 }
 
 
-inline void WSStream::clear_timeout() {
+inline void WSStream_Impl::clear_timeout() {
     _s.clear_timeout();
 }
 
-inline WSStream::Message WSStream::get_message() const {
+inline WSStream_Impl::Message WSStream_Impl::get_message() const {
     if (_close_code.load()) return get_close_message();
     auto t = _parser.getFrameType();
     if (t == WSFrameType::connClose) {
@@ -448,11 +573,11 @@ inline WSStream::Message WSStream::get_message() const {
     }
 }
 
-inline WSStream::Message WSStream::get_close_message() const {
+inline WSStream_Impl::Message WSStream_Impl::get_close_message() const {
     return Message{WSFrameType::connClose, std::string_view(), _close_code.load()};
 }
 
-inline void WSStream::handle_special_message(const Message &msg) {
+inline void WSStream_Impl::handle_special_message(const Message &msg) {
     unsigned int zero = 0;
     switch (msg.type) {
     case WSFrameType::connClose:
@@ -467,28 +592,67 @@ inline void WSStream::handle_special_message(const Message &msg) {
     };
 }
 
-inline WSStream::WSStream(Stream &&s, bool client)
+inline WSStream_Impl::WSStream_Impl(Stream &&s, bool client)
 :_serializer(client),_s(std::move(s))  {}
 
-inline WSStream::WSStream(WSStream &&other)
+inline WSStream_Impl::WSStream_Impl(WSStream_Impl &&other)
 : _parser(std::move(other._parser))
 , _serializer(std::move(other._serializer))
 , _s(std::move(other._s))
 {
 }
 
-inline void WSStream::finish_write(bool ok) {
+inline void WSStream_Impl::finish_write(bool ok) {
+    std::lock_guard _(_mx);
     unsigned int zero = 0;
-    if (!ok) _close_code.compare_exchange_strong(zero, closeConnReset);
+    if (!ok) _close_code.compare_exchange_strong(zero, closeConnReset,std::memory_order_relaxed);
+    if (ok && !_buffer.empty()) {
+        _s.write_async(std::string_view(_buffer.data(), _buffer.size()), false,
+                       [=, b = std::move(_buffer)](bool ok) {
+            return finish_write(ok);
+        });
+    } else {
+        _pending_write = false;
+    }
 }
 
-inline WSStream::~WSStream() {
+inline bool WSStream_Impl::send_frame(const std::string_view &frame) {
+    if (_close_code.load(std::memory_order_relaxed)) return false;
+    if (_pending_write) {
+        _buffer.insert(_buffer.end(), frame.begin(), frame.end());
+    } else {
+        _pending_write = true;
+        _s.write_async(frame, true, [=](bool ok){finish_write(ok);});
+    }
+    return true;
+}
+
+inline WSStream_Impl::~WSStream_Impl() {
     unsigned int zero = 0;
     //set this variable, during destruction of the stream, this halts all pending operations
     _close_code.compare_exchange_strong(zero, closeConnReset);
     //reset stream;
     _s.reset();
 }
+
+
+
+template<>
+inline WSStreamT<std::shared_ptr<WSStream_Impl> > WSStreamT<std::unique_ptr<WSStream_Impl> >::make_shared() {
+    return WSStreamT<std::shared_ptr<WSStream_Impl> >(release());
+}
+
+template<>
+inline WSStreamT<std::shared_ptr<WSStream_Impl> > WSStreamT<std::shared_ptr<WSStream_Impl> >::make_shared() {
+    return *this;
+}
+template<>
+inline WSStreamT<std::unique_ptr<WSStream_Impl> >::WSStreamT(Stream &&stream, bool client)
+:std::unique_ptr<WSStream_Impl> (std::make_unique<WSStream_Impl>(std::move(stream), client)) {}
+
+template<>
+inline WSStreamT<std::shared_ptr<WSStream_Impl> >::WSStreamT(Stream &&stream, bool client)
+:std::shared_ptr<WSStream_Impl> (std::make_shared<WSStream_Impl>(std::move(stream), client)) {}
 
 
 }

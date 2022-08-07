@@ -75,7 +75,7 @@ protected:
 	FDMap fd_map;
 	TMMap tm_map;
 
-	std::atomic_bool stopped, intr;
+	std::atomic_bool stopped = false, intr = false;
 
 
 	void regWait(int socket, Op, Callback &&cb, std::chrono::system_clock::time_point timeout);

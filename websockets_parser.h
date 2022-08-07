@@ -10,6 +10,38 @@
 namespace userver {
 
 
+enum class WSFrameType {
+    ///Unkown frame - this state is never returned, however it used to initialize variables
+    unknown = 0,
+    ///frame is not complete yet
+    /** If incomplete received through recv(), it can mean, that remote stream
+     * was closed or an error has been reported. You need to check stream
+     * state, what happened.
+     *
+     * If the stream is timeouted, you can retry recv() to wait to rest of the
+     * frame.
+     */
+    incomplete,
+    ///text frame
+    text,
+    ///binary frame
+    binary,
+    ///connection close frame
+    connClose,
+    ///ping frame
+    ping,
+    ///pong frame
+    pong,
+    ///Object is initial state
+    /**
+     * No data has been retrieved yet
+     *
+     * This frame has no data
+     */
+    init
+};
+
+
 
 ///Some constants defined for websockets
 class WebSocketsConstants {
@@ -47,35 +79,14 @@ public:
 
 };
 
-enum class WSFrameType {
-	///Unkown frame - this state is never returned, however it used to initialize variables
-	unknown = 0,
-	///frame is not complete yet
-	/** If incomplete received through recv(), it can mean, that remote stream
-	 * was closed or an error has been reported. You need to check stream
-	 * state, what happened.
-	 *
-	 * If the stream is timeouted, you can retry recv() to wait to rest of the
-	 * frame.
-	 */
-	incomplete,
-	///text frame
-	text,
-	///binary frame
-	binary,
-	///connection close frame
-	connClose,
-	///ping frame
-	ping,
-	///pong frame
-	pong,
-	///Object is initial state
-	/**
-	 * No data has been retrieved yet
-	 *
-	 * This frame has no data
-	 */
-	init
+struct WSMessage {
+    ///frame type
+    WSFrameType type;
+    ///frame data
+    std::string_view data;
+    ///code associated with the frame
+    /** It is applied only for certain types of frame, otherwise it is zero */
+    unsigned int code;
 };
 
 
