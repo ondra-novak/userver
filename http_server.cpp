@@ -358,8 +358,6 @@ HttpServerRequest::~HttpServerRequest() {
 				}
 				else sendErrorPage(204);
 			}
-			stream.write_async(buff,nullptr);
-			buff.str(std::string());
 			if (logger && valid) logger->log(ReqEvent::done,*this);
 			if (enableKeepAlive && !hasBody && klcb != nullptr) klcb(stream, *this);
 		} else {
@@ -391,7 +389,7 @@ Stream HttpServerRequest::getBody() {
 		}
 		if (hasExpect) {
 		    buff << httpver << " 100 Continue\r\n\r\n";
-		    stream.write_async(buff, nullptr);
+		    stream.write_sync(buff.str());
 		    buff.str(std::string());
 		}
 		hasBody = false;
@@ -564,7 +562,7 @@ Stream HttpServerRequest::send() {
 	std::string_view statusMsg;
 	if (statusMessage.empty()) statusMsg = getStatusCodeMsg(statusCode); else statusMsg = statusMessage;
 	buff << httpver << " " << statusCode << " " << statusMsg << std::string_view(sendHeader.data(), sendHeader.size()) << "\r\n\r\n";
-	stream.write_async(buff, nullptr);
+	stream.write_sync(buff);
 	buff.str(std::string());
 	response_sent = true;
 	if (logger) logger->log(ReqEvent::header_sent,*this);
@@ -804,7 +802,7 @@ void HttpServerRequest::sendFileAsync(std::unique_ptr<HttpServerRequest> &reqptr
        //if count non zero
        if (cnt) {
            //write buffer asynchronously
-           out.write(std::string_view(buff.data(), cnt),false)
+           out.write(std::string_view(buff.data(), cnt))
                    >> [buff = std::move(buff), reqptr = std::move(reqptr), in = std::move(in), &out](bool ok) mutable {
                //if written
                if (ok) {

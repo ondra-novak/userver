@@ -31,4 +31,9 @@ Stream createSocketStream(std::unique_ptr<ISocket> &&socket) {
 Stream createStreamReference(Stream &stream) {
     return std::make_unique<StreamReferenceWrapper>(*stream);
 }
+
+Stream createBufferedStream(Stream &&stream) {
+    auto &f = dynamic_cast<AbstractBufferedFactory &>(*stream);
+    return Stream(f.create_buffered());
+}
 }

@@ -350,12 +350,14 @@ public:
 
 protected:
 
+    using FlushList = std::vector<Callback<void(bool)> >;
 
     WebSocketParser _parser;
     WebSocketSerializer _serializer;
     mutable std::recursive_mutex _mx;
     std::atomic<unsigned int> _close_code = 0;
     std::vector<char> _buffer;
+    FlushList _flush_list;
     bool _pending_write = false;
     Stream _s;
 
@@ -539,18 +541,13 @@ inline bool WSStream_Impl::send_close(int code) {
 
 inline std::size_t WSStream_Impl::get_buffered_amount() const {
     std::lock_guard _(_mx);
-    return _s->get_pending_write_size() + _buffer.size();
+    return  _buffer.size();
 }
 
 template<typename Fn>
 void WSStream_Impl::flush_async(Fn &&cb) {
     std::lock_guard _(_mx);
-    std::string_view dt(_buffer.data(), _buffer.size());
-    _s.write_async(dt, false, [=, b = std::move(_buffer), cb = std::move(cb)](bool ok) mutable {
-        unsigned int zero = 0;
-        if (!ok) _close_code.compare_exchange_strong(zero, closeConnReset,std::memory_order_relaxed);
-        cb(ok);
-    });
+    _flush_list.push_back(std::forward<Fn>(cb));
 }
 
 
@@ -603,16 +600,23 @@ inline WSStream_Impl::WSStream_Impl(WSStream_Impl &&other)
 }
 
 inline void WSStream_Impl::finish_write(bool ok) {
-    std::lock_guard _(_mx);
-    unsigned int zero = 0;
-    if (!ok) _close_code.compare_exchange_strong(zero, closeConnReset,std::memory_order_relaxed);
-    if (ok && !_buffer.empty()) {
-        _s.write_async(std::string_view(_buffer.data(), _buffer.size()), false,
-                       [=, b = std::move(_buffer)](bool ok) {
-            return finish_write(ok);
-        });
-    } else {
-        _pending_write = false;
+    FlushList tmp;
+    {
+        std::lock_guard _(_mx);
+        std::swap(tmp,_flush_list);
+        unsigned int zero = 0;
+        if (!ok) _close_code.compare_exchange_strong(zero, closeConnReset,std::memory_order_relaxed);
+        if (ok && !_buffer.empty()) {
+            _s.write_async(std::string_view(_buffer.data(), _buffer.size()),
+                           [=, b = std::move(_buffer)](bool ok) {
+                return finish_write(ok);
+            });
+        } else {
+            _pending_write = false;
+        }
+    }
+    for (const auto &cb : tmp) {
+        cb(ok);
     }
 }
 
@@ -622,7 +626,7 @@ inline bool WSStream_Impl::send_frame(const std::string_view &frame) {
         _buffer.insert(_buffer.end(), frame.begin(), frame.end());
     } else {
         _pending_write = true;
-        _s.write_async(frame, true, [=](bool ok){finish_write(ok);});
+        _s.write_async(frame, [=](bool ok){finish_write(ok);});
     }
     return true;
 }

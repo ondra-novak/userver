@@ -35,7 +35,7 @@ public:
     virtual void put_back(const std::string_view &buffer) override;
     virtual void timeout_async_write() override;
     virtual void read_async(Callback<void(std::string_view)> &&callback) override;
-    virtual void write_async(const std::string_view &buffer, bool copy_content,
+    virtual bool write_async(const std::string_view &buffer,
                 Callback<void(bool)> &&callback) override;
     virtual int get_read_timeout() const override;
     virtual std::string_view read_sync_nb() override;
@@ -50,9 +50,6 @@ public:
     virtual void set_write_timeout(int tm_in_ms) override;
     virtual bool write_sync(const std::string_view &buffer) override;
     virtual void timeout_async_read() override;
-    virtual std::size_t get_pending_write_size() const override {
-    	return _ref.get_pending_write_size();
-    }
 
 
 protected:

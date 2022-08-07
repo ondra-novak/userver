@@ -15,141 +15,36 @@
 
 namespace userver {
 
-namespace _details {
-
-struct BufChainAlloc { // @suppress("Miss copy constructor or assignment operator")
-	std::size_t _sz;
-	char *_ptr;
-};
-
-///helper class to store chain of pending writes
-/** each instance holds reference or copy of the buffer
- * and pointer to next. There is also instance marked as static allocated
- * which cannot be released
- *
- */
-class BufChain {
+class AbstractBufferedFactory {
 public:
-	BufChain(BufChainAlloc &al, Callback<void(bool)> &&cb)
-		:data(al._ptr, al._sz)
-		,cb(std::move(cb))
-		,next(nullptr)
-		,static_alloc(false) {}
 
-	BufChain():next(nullptr),static_alloc(true) {}
-	BufChain(const std::string_view &data, Callback<void(bool)> &&cb):
-		data(data),
-		cb(std::move(cb)),
-		next(nullptr),
-		static_alloc(false) {}
-	BufChain(const BufChain &other) = delete;
-	BufChain &operator=(const BufChain &other) = delete;
-
-	void update(const std::string_view &data, Callback<void(bool)> &&cb) {
-		this->data = data;
-		this->cb = std::move(cb);
-	}
-
-	void call_cb(bool res) {
-		auto cb = std::move(this->cb);
-		if (cb != nullptr) cb(res);
-	}
-
-	struct Deleter {
-		void operator()(BufChain *x) {
-			if (x) x->release();
-		}
-	};
-
-	std::string_view data;
-    Callback<void(bool)> cb;
-	BufChain *next;
-	bool static_alloc;
-
-	void release() {
-		if (next) {
-			next->release();
-			next = nullptr;
-		}
-		if (!static_alloc)
-			delete this;
-	}
-
-	void *operator new(std::size_t sz) {
-		return ::operator new(sz);
-	}
-
-	void *operator new(std::size_t sz, BufChainAlloc &al) {
-		char *ptr = static_cast<char *>(::operator new(sz+al._sz));
-		al._ptr = ptr+sz;
-		return ptr;
-	}
-	void operator delete(void *ptr, BufChainAlloc &al ) {
-		::operator delete(ptr);
-	}
-	void operator delete(void *ptr, std::size_t sz) {
-		::operator delete(ptr);
-	}
-
-	static BufChain *lockPtr() {
-		static BufChain lockInst;
-		return &lockInst;
-	}
-
-	static bool advance(std::unique_ptr<BufChain, Deleter> &ptr) {
-		auto n = ptr->next;
-		ptr->next = nullptr;
-		ptr = std::unique_ptr<BufChain, Deleter>(n);
-		return ptr != nullptr;
-	}
-
-	static std::unique_ptr<BufChain, Deleter> allocCopy(const std::string_view &data, Callback<void(bool)> &&cb) {
-		BufChainAlloc r{data.size()};
-		BufChain *ret = new(r) BufChain(r, std::move(cb));
-		std::copy(data.begin(), data.end(), r._ptr);
-		return std::unique_ptr<BufChain, Deleter>(ret);
-	}
-
-	static std::unique_ptr<BufChain, Deleter> allocRef(const std::string_view &data, Callback<void(bool)> &&cb) {
-		return std::unique_ptr<BufChain, Deleter>(new BufChain(data, std::move(cb)));
-	}
+    virtual ~AbstractBufferedFactory() = default;
+    virtual std::unique_ptr<AbstractStreamInstance> create_buffered()  = 0;
 
 };
-
-using PBufChain = std::unique_ptr<BufChain, BufChain::Deleter>;
-
-
-}
 
 
 template<typename T>
-class StreamInstance: public AbstractStreamInstance {
+class StreamInstance: public AbstractStreamInstance, public AbstractBufferedFactory {
 public:
 
     template<typename ... Args>
-    StreamInstance(Args &&... args) {
-        new(&_buffer) T(std::forward<Args>(args)...);
-        //special flag stops deleting on statically allocated object
-        _first_line.next = &_first_line;
-    }
+    StreamInstance(Args &&... args):_target(std::forward<Args>(args)...) {}
 
     StreamInstance(const StreamInstance &other) = delete;
     StreamInstance &operator=(const StreamInstance &other) = delete;
 
 
-    T *operator->() {return getContent();}
-    const T *operator->() const {return getContent();}
+    T *operator->() {return &_target;}
+    const T *operator->() const {return &_target;}
 
 
 
     virtual ~StreamInstance();
 protected:  //content
 
-    T *getContent() {return reinterpret_cast<T *>(_buffer);}
-    const T *getContent() const {return reinterpret_cast<const T *>(_buffer);}
 
-
-    char _buffer[sizeof(T)];
+    T _target;
 
 protected:  //read part
     std::vector<char> _read_buffer;
@@ -158,6 +53,10 @@ protected:  //read part
     std::atomic<int> _pending_read = 0;  //<non-zero means there is pending read active
     std::promise<void> *_async_read_join = nullptr; //<used during destruction to join reads
     static constexpr int half_range = std::numeric_limits<int>::max()/2;
+
+#ifndef NDEBUG
+    std::atomic<int> _reading = 0;
+#endif
 
     void expand_read_buffer() {
         auto sz = _read_buffer.size();
@@ -172,7 +71,13 @@ protected:  //read part
                 expand_read_buffer();
                 _read_buffer_need_expand = false;
             }
-            std::size_t r = getContent()->read(_read_buffer.data(), _read_buffer.size());
+#ifndef NDEBUG
+            assert(_reading.fetch_add(1, std::memory_order_relaxed) == 0); //multiple pending reading
+#endif
+            std::size_t r = _target.read(_read_buffer.data(), _read_buffer.size());
+#ifndef NDEBUG
+            _reading.fetch_sub(1, std::memory_order_relaxed);
+#endif
             _read_buffer_need_expand = r == _read_buffer.size();
             return std::string_view(_read_buffer.data(), r);
         } else {
@@ -193,11 +98,12 @@ protected:  //read part
     	//trailer is executed when this function exits, but
     	//can be carried to the async call
     	auto t = ondra_shared::trailer([this]{
-        	if ((--_pending_read) == half_range) {
+        	if ((_pending_read.fetch_sub(1, std::memory_order_relaxed))-1 == half_range) {
+        	    _pending_read.fetch_add(0, std::memory_order_seq_cst);
         		_async_read_join->set_value();
         	}
     	});
-    	if (++_pending_read > half_range) { //this means, that reading is no more possible
+    	if (_pending_read.fetch_add(1, std::memory_order_relaxed) >= half_range) { //this means, that reading is no more possible
     		clear_timeout(); //we are going to report eof, so timeout must be cleared
         	callback(std::string_view());
     	} else if (_put_back.empty()) {
@@ -205,8 +111,14 @@ protected:  //read part
 					expand_read_buffer();
 					_read_buffer_need_expand = false;
 				}
-				getContent()->read(_read_buffer.data(), _read_buffer.size(),
+#ifndef NDEBUG
+            assert(_reading.fetch_add(1, std::memory_order_relaxed) == 0); //multiple pending reading
+#endif
+				_target.read(_read_buffer.data(), _read_buffer.size(),
 						[this, cb = std::move(callback), t= std::move(t)] (int r){
+#ifndef NDEBUG
+            _reading.fetch_sub(1, std::memory_order_relaxed);
+#endif
 					_read_buffer_need_expand = static_cast<std::size_t>(r) == _read_buffer.size();
 					cb(std::string_view(_read_buffer.data(), r));
 				});
@@ -219,177 +131,118 @@ protected:  //read part
         _put_back = buffer;
     }
     virtual void close_input() override {
-        getContent()->closeInput();
+        _target.closeInput();
     }
 
     virtual void timeout_async_read() {
-        getContent()->setRdTimeout(0);
-        getContent()->cancelAsyncRead(true);
+        _target.setRdTimeout(0);
+        _target.cancelAsyncRead(true);
     }
 
 
 protected:  //write part
 
 
-    using Line = _details::BufChain;
-    using PLine = _details::PBufChain;
-
-    std::atomic<Line *> _cur_line = std::atomic<Line *>(nullptr);
-    std::atomic<std::size_t> _pending_writes;
-    std::atomic<bool> _async_write_join = false;
-    Line _first_line;
-
+    std::atomic<int> _pending_write = 0;
+    std::promise<void> *_async_write_join = nullptr; //<used during destruction to join writes
+    std::atomic<bool> _write_error = false;
+#ifndef NDEBUG
+    std::atomic<int> _writing= 0;
+#endif
     virtual bool write_sync(const std::string_view &buffer) override {
-        if (buffer.empty()) return true;
-        std::size_t r = getContent()->write(buffer.data(), buffer.size());
-        return r?write_sync(buffer.substr(r)):false;
+        std::string_view b(buffer);
+        if (_write_error.load(std::memory_order_relaxed)) return false;
+#ifndef NDEBUG
+            assert(_writing.fetch_add(1, std::memory_order_relaxed) == 0); //multiple pending reading
+#endif
+        while (!b.empty()) {
+            std::size_t r = _target.write(buffer.data(), buffer.size());
+            if (r < 1) {
+                _write_error.store(true, std::memory_order_relaxed);
+                return false;
+            }
+            b = b.substr(r);
+        }
+
+#ifndef NDEBUG
+       _writing.fetch_sub(1, std::memory_order_relaxed);
+#endif
+        return true;
     }
 
-    virtual void write_async(const std::string_view &buffer, bool copy_content, Callback<void(bool)> &&callback) override {
-    	if (_async_write_join.load()) {
-    			callback(false);
-    	} else {
-    		write_async2(buffer,copy_content,std::move(callback));
-    	}
-    }
-    void write_async2(const std::string_view &buffer, bool copy_content, Callback<void(bool)> &&callback)  {
-    	_pending_writes+=buffer.size();
-    	//if not copy_content - we can prepare buffer without allocation and copying
-    	if (!copy_content) {
-    		//try to lock for first line - cur queue must be empty
-    		Line *top = nullptr;
-    		if (_cur_line.compare_exchange_strong(top, &_first_line)) {
-    			//we locked, we are using _first_line
-    			//update first line
-    			_first_line.update(buffer, std::move(callback));
-    			//send queue
-    			write_async_send_queue(true);
-    			//return here
-    			return;
-    		}
-    	}
-    	//allocate depend on copy_content
-		auto b = copy_content
-				?Line::allocCopy(buffer, std::move(callback))
-				:Line::allocRef(buffer, std::move(callback));
-		//enqueue the next item
-		auto r = b->next = _cur_line;
-		while (!_cur_line.compare_exchange_weak(b->next, b.get())) {
-			r = b->next;
-		}
-		b.release();
-		//if it is first item, start operation
-		if (r == nullptr) {
-			write_async_send_queue(true);
-		} //otherwise someone else will handle
+    virtual bool write_async(const std::string_view &buffer, Callback<void(bool)> &&callback) override {
+        if (_write_error.load(std::memory_order_relaxed)) {
+            callback(false);
+            return false;
+        }
+        if (buffer.empty()) {
+            callback(true);
+            return !_write_error.load(std::memory_order_relaxed);
+        }
+
+        auto t = ondra_shared::trailer([this]{
+            if ((_pending_write.fetch_sub(1, std::memory_order_relaxed))-1 == half_range) {
+                _pending_write.fetch_add(0, std::memory_order_seq_cst);
+                _async_write_join->set_value();
+            }
+        });
+
+        if (_pending_write.fetch_add(1, std::memory_order_relaxed) >= half_range) {
+            callback(false);
+            return false;
+        }
+
+#ifndef NDEBUG
+            assert(_writing.fetch_add(1, std::memory_order_relaxed) == 0); //multiple pending reading
+#endif
+        _target.write(buffer.data(), buffer.size(),
+                 [this, t = std::move(t), buffer = std::string_view(buffer), callback = std::move(callback)](int r) mutable {
+#ifndef NDEBUG
+            _writing.fetch_sub(1, std::memory_order_relaxed);
+#endif
+            if (r>0) {
+                std::size_t len = r;
+                if (len < buffer.size()) {
+                    StreamInstance<T>::write_async(buffer.substr(len), std::move(callback));
+                } else {
+                    callback(true);
+                }
+            } else {
+                _write_error.store(true,std::memory_order_relaxed);
+                callback(false);
+            }
+        });
+        return true;
     }
 
-
-    void write_async_send_queue(bool status) {
-    	auto lk = Line::lockPtr();
-    	//first lock queue and reorder
-    	auto top = _cur_line.exchange(lk);
-    	Line *send_queue = nullptr;
-    	//stop on null or lockPtr
-    	while (top != nullptr && top != lk) {
-    		//reverse order of queue
-    		auto n = top->next;
-    		top->next= send_queue;
-    		send_queue = top;
-    		top = n;
-    	}
-    	//flush this queue
-    	write_async_send_queue_next(PLine(send_queue), status);
-    }
-
-    void write_async_send_queue_next(PLine &&send_queue, bool status) noexcept {
-    	//send_queue shouldn't be null there, however ...
-    	while (send_queue != nullptr) {
-    	    status = status & !_async_write_join.load();
-    		//if status is not good, or data are empty - handle callback
-    		if (!status || send_queue->data.empty()) {
-    			_pending_writes-= send_queue->data.size();
-    			//pick callback and store it outside
-    			auto cb = std::move(send_queue->cb);
-    			//advance send_queue ptr - if it is not null
-    			if (Line::advance(send_queue)) {
-    				//if callback is defined, call it
-    				if (cb!=nullptr) cb(status);
-    				//continue
-    			} else {
-    				//queue is empty, unlock it
-    				auto top = Line::lockPtr();
-    				//try to unlock the queue - set queue to nullptr
-    		    	if (!_cur_line.compare_exchange_strong(top,nullptr)) {
-    		    		//if not success, there is still work to do
-    		    		//call the callback now
-    		    		if (cb!=nullptr) cb(status);
-    		    		//continue with new queue
-    		    		write_async_send_queue(status);
-    		    		//break this;
-    		    		return;
-    		    	} else {
-    		    		//unlock successful - we can call the last callback
-    		    		if (cb!=nullptr) cb(status);
-    		    		//break this
-    		    		return;
-    		    	}
-    			}
-    		} else {
-    		    auto q = send_queue.get();
-    			//data to send - asynchronously send them
-				getContent()->write(q->data.data(),
-									q->data.size(),
-									[send_queue = std::move(send_queue), this](int r) mutable {
-					if (r>0) {
-						_pending_writes-= r;
-						//some data sent, commit the buffer
-						send_queue->data = send_queue->data.substr(r);
-						//repeat operation with success state
-						write_async_send_queue_next(std::move(send_queue), true);
-					} else {
-						//timeout or error - repeat operation with failed states
-						write_async_send_queue_next(std::move(send_queue), false);
-					}
-				});
-				//break this
-				return;
-    		}
-    	}
-    	{
-    		//in this case. just try to unlock
-			auto top = Line::lockPtr();
-	    	if (!_cur_line.compare_exchange_strong(top,nullptr)) {
-	    		write_async_send_queue(status);
-	    	}
-    	}
-    }
 
     virtual void close_output() {
-        write_async(std::string_view(), false, [this](bool) {
-            getContent()->closeOutput();
-        });
+        if (_write_error.load(std::memory_order_relaxed)) return;
+#ifndef NDEBUG
+            assert(_writing.fetch_add(1, std::memory_order_relaxed) == 0); //multiple pending reading
+#endif
+        _target.closeOutput();
+#ifndef NDEBUG
+            _writing.fetch_sub(1, std::memory_order_relaxed);
+#endif
     }
 
     virtual void timeout_async_write() {
-        getContent()->setWrTimeout(0);
-        getContent()->cancelAsyncWrite(true);
+        _target.setWrTimeout(0);
+        _target.cancelAsyncWrite(true);
     }
 
-
-    virtual std::size_t get_pending_write_size() const {
-    	return _pending_writes;
-    }
 
 
 protected:  //misc part
-    virtual bool timeouted() {return getContent()->timeouted();}
-    virtual void clear_timeout() {getContent()->clearTimeout();}
-    virtual void set_read_timeout(int tm_in_ms) override {getContent()->setRdTimeout(tm_in_ms);}
-    virtual void set_write_timeout(int tm_in_ms) override {getContent()->setWrTimeout(tm_in_ms);}
-    virtual void set_rw_timeout(int tm_in_ms) override {getContent()->setIOTimeout(tm_in_ms);}
-    virtual int get_read_timeout() const override {return getContent()->getRdTimeout();}
-    virtual int get_write_timeout() const override {return getContent()->getWrTimeout();}
+    virtual bool timeouted() {return _target.timeouted();}
+    virtual void clear_timeout() {_target.clearTimeout();}
+    virtual void set_read_timeout(int tm_in_ms) override {_target.setRdTimeout(tm_in_ms);}
+    virtual void set_write_timeout(int tm_in_ms) override {_target.setWrTimeout(tm_in_ms);}
+    virtual void set_rw_timeout(int tm_in_ms) override {_target.setIOTimeout(tm_in_ms);}
+    virtual int get_read_timeout() const override {return _target.getRdTimeout();}
+    virtual int get_write_timeout() const override {return _target.getWrTimeout();}
+    virtual std::unique_ptr<AbstractStreamInstance> create_buffered();
 
 
 };
@@ -423,15 +276,17 @@ public:
 class StreamReferenceWrapper: public AbstractStreamInstance {
 public:
     StreamReferenceWrapper(AbstractStreamInstance &ref):ref(ref) {}
+    StreamReferenceWrapper(const StreamReferenceWrapper &) = default;
+    StreamReferenceWrapper &operator=(const StreamReferenceWrapper &) = delete;
 
     virtual void put_back(const std::string_view &buffer) override {ref.put_back(buffer);}
     virtual void timeout_async_write() override {ref.timeout_async_write();}
     virtual void read_async(
             userver::Callback<void(std::basic_string_view<char>)> &&callback)
                     override {ref.read_async(std::move(callback));}
-    virtual void write_async(const std::string_view &buffer, bool copy_content,
+    virtual bool write_async(const std::string_view &buffer,
             userver::Callback<void(bool)> &&callback) override {
-        ref.write_async(buffer, copy_content, std::move(callback));
+        return ref.write_async(buffer, std::move(callback));
     }
     virtual int get_read_timeout() const override {
         return ref.get_read_timeout();
@@ -472,10 +327,6 @@ public:
     virtual void timeout_async_read() override {
         return ref.timeout_async_read();
     }
-    virtual std::size_t get_pending_write_size() const override {
-    	return ref.get_pending_write_size();
-    }
-
 protected:
     AbstractStreamInstance &ref;
 };
@@ -485,19 +336,17 @@ protected:
 template<typename T>
 inline userver::StreamInstance<T>::~StreamInstance() {
 
-	//disable writes
-	_async_write_join = true;
 	//disable read and signal pending read to not trigger promise yet
 	// however if there is no pending read (half_range + 1), no
 	//action is needed
-	//setting atomic to this value prevents futher reading
-	if ((_pending_read+=half_range+1) > (half_range+1)) {
+	//setting atomic to this value prevents further reading
+	if (_pending_read.fetch_add(half_range+1, std::memory_order_relaxed) > 0) {
 		//there is pending read, we must explicitly join
 		std::promise<void> join_read;
 		//set promise ptr
 		_async_read_join = &join_read;
 		//decrease 1 from pending read, and if there is some reading...
-		if (--_pending_read > half_range) {
+		if (_pending_read.fetch_sub(1, std::memory_order_seq_cst)-1 > half_range) {
 			//interrupt it
 			StreamInstance<T>::timeout_async_read();
 			//wait until promise is resolved
@@ -505,44 +354,123 @@ inline userver::StreamInstance<T>::~StreamInstance() {
 		}
 	}
 
-	//lock the queue - to detect, whether there is pending write operation
-	auto lk = Line::lockPtr();
-	//top = top most waiting operation
-	auto top = _cur_line.exchange(lk);
-	//if top is not nullptr, there is a pending write
-	if (top != nullptr) {
-		//there is pending write, we must explicitly join
-		std::promise<void> join_write;
-		//prepare (statically allocated) line with empty buffer
-		Line jpt;
-		//set callback, which resolves promise on completion of the queue
-		jpt.cb = [&](bool){
-			join_write.set_value();
-		};
-		//set the line to queue.
-		auto nt = _cur_line.exchange(&jpt);
-		//nt must be lockPtr(). If it is nullptr, current pending
-		//operation already completed
-		if (nt) {
-			//timeout any write
-		    StreamInstance<T>::timeout_async_write();
-			//in case of non-null, wait for completion
-			join_write.get_future().wait();
-		}
-		//there should be no pending write operation
-		//delete the queue, invoke callbacks with 'false'
-		while (top != nullptr && top != lk) {
-			auto nx = top->next;
-			top->next = nullptr;
-			if (top->cb != nullptr) top->cb(false);
-			top->release();
-			top = nx;
-		}
-	}
+    //disable write and signal pending write to not trigger promise yet
+    // however if there is no pending write (half_range + 1), no
+    //action is needed
+    //setting atomic to this value prevents further writing
+    if (_pending_write.fetch_add(half_range+1, std::memory_order_relaxed) > 0) {
+        //there is pending read, we must explicitly join
+        std::promise<void> join_write;
+        //set promise ptr
+        _async_write_join = &join_write;
+        //decrease 1 from pending read, and if there is some reading...
+        if (_pending_write.fetch_sub(1, std::memory_order_seq_cst)-1 > half_range) {
+            //interrupt it
+            StreamInstance<T>::timeout_async_write();
+            //wait until promise is resolved
+            join_write.get_future().wait();
+        }
+    }
+}
 
-	//now we are good
-	//destroy the underlying socket
-    getContent()->~T();
+
+template<typename T>
+class BufferedStreamInstance: public StreamInstance<T> {
+public:
+    using StreamInstance<T>::StreamInstance;
+
+    virtual bool write_sync(const std::string_view &buffer) {
+        std::unique_lock _(_mx);
+        if (this->_write_error || _close_on_flush) return false;
+        if (_pending_write) {
+            std::promise<bool> p;
+            write_async(buffer, [&](bool ok){
+               p.set_value(ok);
+            });
+            _.unlock();
+            return p.get_future().get();
+        } else {
+            bool ok = StreamInstance<T>::write_sync(buffer);
+            this->_write_error = this->_write_error || !ok;
+            return ok;
+        }
+    }
+    virtual bool write_async(const std::string_view &buffer, Callback<void(bool)> &&callback) {
+        std::unique_lock _(_mx);
+        if (this->_write_error || _close_on_flush) return false;
+        return write_lk(buffer, std::move(callback));
+    }
+
+    virtual void close_output() {
+        std::unique_lock _(_mx);
+        if (this->_write_error || _close_on_flush) return;
+        _close_on_flush = true;
+        if (!_pending_write) {
+            StreamInstance<T>::close_output();
+        }
+    }
+
+    virtual std::size_t get_buffered_amount() const {
+        std::unique_lock _(_mx);
+        return _buffer.size();
+    }
+
+protected:
+
+    using FlushList = std::vector<Callback<void(bool)> >;
+
+
+    mutable std::recursive_mutex _mx;
+    std::vector<char> _buffer;
+    FlushList _flush_list;
+    bool _pending_write = false;
+    bool _close_on_flush = false;
+
+    void finish_write(bool ok) {
+        FlushList tmp;
+        {
+            std::lock_guard _(_mx);
+            std::swap(tmp,_flush_list);
+            if (!ok) this->_write_error = true;
+            if (ok && !_buffer.empty()) {
+                std::string_view ss(_buffer.data(), _buffer.size());
+                StreamInstance<T>::write_async(ss,
+                               [=, b = std::move(_buffer), tmp = std::move(tmp)](bool ok) {
+                    for (const auto &cb : tmp) {
+                        cb(ok);
+                    }
+                    return finish_write(ok);
+                });
+            } else {
+                _pending_write = false;
+                if (_close_on_flush) StreamInstance<T>::close_output();
+            }
+        }
+    }
+
+    bool write_lk(const std::string_view &data, Callback<void(bool)> &&callback)  {
+        if (this->_write_error || _close_on_flush) return false;
+        _buffer.insert(_buffer.end(), data.begin(), data.end());
+        if (_pending_write) {
+            if (callback != nullptr) _flush_list.push_back(std::move(callback));
+        } else {
+            _pending_write = true;
+            std::string_view ss(_buffer.data(), _buffer.size());
+            StreamInstance<T>::write_async(ss,
+                    [=, b = std::move(_buffer), callback = std::move(callback)](bool ok){
+                if (callback != nullptr) callback(ok);
+                finish_write(ok);
+            });
+        }
+        return true;
+    }
+
+
+};
+
+template<typename T>
+inline std::unique_ptr<AbstractStreamInstance> StreamInstance<T>::create_buffered(){
+    return std::make_unique<BufferedStreamInstance<T> >(std::move(_target));
 }
 
 

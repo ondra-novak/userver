@@ -124,27 +124,9 @@ public:
      */
     virtual bool write_sync(const std::string_view &buffer) = 0;
 
-    ///Writes to the output asynchronously
-    /**
-     * @param buffer buffer to write. Note if the buffer is empty, the operation is still queued
-     * @param copy_content se true to copy content, which allows to discard buffer during the pending operation.
-     *  However copying is extra operation, so if you are to sure that buffer will not disappear
-     *  during the operation, you can set this parameter to false
-     * @param callback callback function which is called when operation is done. The value
-     * 'true' is passed when data has been send, or false, when error happened (or timeout).
-     * This parametr can be nullptr, in this case, no callback is called
-     *
-     * @note Do not use this function to send single characters, as the function
-     * is to complex to be less efficient in this case. Use put_char() for this purpose
-     *
-     * @note Multiple threads can use this function, all write requests are queued and
-     * processed serialized
-     *
-     * @note To determine, which error caused loosing the connection, you can check
-     * for current exception. The exception pointer is set when there was an error. If
-     * the exception pointer is not set, there were timeout out or EOF
-     */
-    virtual void write_async(const std::string_view &buffer, bool copy_content, Callback<void(bool)> &&callback) = 0;
+
+    ///Writes asynchronously
+    virtual bool write_async(const std::string_view &buffer, Callback<void(bool)> &&callback) = 0;
     ///Closes the output
     /**
      * Operation closes output, so other side receives EOF. No futher writes
@@ -154,18 +136,6 @@ public:
      * once all requests are processed
      */
     virtual void close_output() = 0;
-
-    ///Retrieves current pending write size
-    /** total count of bytes to be written . You can use this to
-     * chech high watermark level - to slow down writes if the
-     * number is too high
-     *
-     * @return bytes waiting to be written
-     *
-     * @note function doesn't work for sync writes
-     */
-    virtual std::size_t get_pending_write_size() const = 0;
-
 
     ///Shorten writing timeout to zero
     /**
@@ -213,6 +183,14 @@ public:
 
 };
 
+class IBufferedStreamInfo {
+public:
+    virtual ~IBufferedStreamInfo() = default;
+
+    virtual std::size_t get_buffered_amount() const = 0;
+};
+
+
 template<typename PtrType>
 class Stream_t: public PtrType {
 public:
@@ -222,23 +200,160 @@ public:
     Stream_t(const PtrType &other):PtrType(other) {}
     Stream_t(PtrType &&other):PtrType(std::move(other)) {}
 
+    ///Read synchronously
+    /**
+     * @return all data fetch from the stream. The data are stored in stream's buffer,
+     * and are valid until next read operation is called. If there are no data to be
+     * read, function blocks and unblocks when at least one byte arrives, or timeout
+     * ellapses. Note that synchronous reading without the timeout cannot be interrupted.
+     * If you need this feature, use asynchronous reading. If the returned buffer is empty,
+     * reading probably timeouted or reached end of stream (other side closed the connection).
+     * You can distinguish between these two states by testing timeouted() function.
+     * If timeouted() returns false, then empty buffer means end of stream.
+     *
+     * @note MT Safety - only one thread can read at time
+     */
+
     std::string_view read_sync() {return (*this)->read_sync();}
+    ///Read synchronously non blocking
+    /**
+     * @return immediately available data to be read and processed. Note that function
+     * can return empty buffer, if there are not immediately available data. This doesn't
+     * mean, that end of stream has been reached. You need to perform read_sync() to get
+     * the valid stream state
+     *
+     * @note MT Safety - only one thread can read at time
+     *
+     * @note There is connection between read_sync_nb() and put_back(). This function
+     * returns whole put_back buffer and clears it.
+     */
+    std::string_view read_sync_nb() {return (*this)->read_sync_nv();}
+
+    ///Reads asynchronously
+    /**
+     * @param callback reads asynchronously and calls callback function with read data.
+     * If the data are not immediately available, reading continues at the background.
+     * The function must accept std::string_view. The passed buffer can be empty, if
+     * operation timeouted or end of stream has been reached (other side closed the connection)
+     * You can distinguish between these two states by testing timeouted() function.
+     *
+     * @note MT Safety - only one thread can read at time
+     *
+     */
     void read_async(Callback<void(std::string_view)> &&callback) {(*this)->read_async(std::move(callback));}
+
+    ///Puts back unprocessed data
+    /**
+     * @param buffer contains view to unprocessed data. Note the returned buffer should
+     * be sub-view of buffer returned by read_sync (or passed to the callback of the function
+     * read_async). It is not mistake to pass different buffer, but you need to ensure,
+     * that buffer stays valid, until it is retrieved again.
+     *
+     * @note MT Safety - only one thread can read at time
+     *
+     */
     void put_back(const std::string_view &buffer) {(*this)->put_back(buffer);}
+
+    ///Closes the input
+    /**
+     * When input is closed, no more reading is possible, it is reported as end of stream
+     *
+     * @note MT Safety - this function can be called from the different thread
+     *
+     */
     void close_input() {(*this)->close_input();}
+
+    ///Shorts timeout of reading to zero and iterrupts asynchronous reading
+    /** This operation can interrupt asynchronous reading. It also sets read timeout
+     * to zero, so all further reading immediately timeouts. Reading callback
+     * function receives an empty buffer and timeouted() reports true
+     *
+     * @note MT Safety - this function can be called from the different thread. Note that
+     * only one thread can call this function at time
+     */
     void timeout_async_read() {(*this)->timeout_async_read();}
+
+
+    ///Writes synchronously
+    /**
+     * @param buffer content of buffer to write
+     * @retval true write successful
+     * @retval false write failure - connection reset, or other unrecorverable error so
+     * further writing is not possible
+     *
+     * @note MT Safety - only one thread can write at time
+     */
     bool write_sync(const std::string_view &buffer) {return (*this)->write_sync(buffer);}
-    void write_async(const std::string_view &buffer, bool copy_content, Callback<void(bool)> &&callback) {(*this)->write_async(buffer, copy_content, std::move(callback));}
+    ///Write asynchronously
+    /**
+     * @param buffer content of buffer to write. The content of the buffer must remain
+     * valid until the write is finished. You can achieve this by allocating a buffer
+     * before reading and release the buffer in the callback function.
+     *
+     * @param callback function called when writing is finished (or failed).
+     * @retval true processed
+     * @retval false writing rejected, because stream is disconnected.
+     *                Note that callback is still called (with false), so it is safe to
+     *                ignore result.
+     *
+     * @note MT Safety - only one thread can write at time. Don't start new writing
+     * before the previous one finished (by calling the callback).
+     */
+    bool write_async(const std::string_view &buffer, Callback<void(bool)> &&callback) {
+        return (*this)->write_async(buffer, std::move(callback));
+    }
+    ///Shorts timeout of writing to zero and interrupts asynchronous writing
+    /** This operation can interrupt asynchronous writing. It also sets write timeout
+     * to zero, so all further writing immediately timeouts. Writing callback
+     * function receives false as result
+     *
+     * @note MT Safety - this function can be called from the different thread. Note that
+     * only one thread can call this function at time
+     */
     void timeout_async_write() {(*this)->timeout_async_write();}
+
+    ///Closes the output
+    /**
+     * When output is closed, other side receives end of stream signal. However the reading
+     * is still possible.
+     *
+     * @note MT Safety - this function can be called only if there is no pending writing
+     */
     void close_output() {(*this)->close_output();}
+
+    ///Determines, whether reading timeouted
+    /**
+     * @retval true reading timeouted. You need to call clear_timeout(), to continue reading
+     * @retval false no timeout detected, so if you received empty buffer, it is end of stream
+     *
+     * @note There is no such function for writing. If writing timeouts, the stream is
+     * considered as disconnected
+     *
+     */
     bool timeouted() const {return (*this)->timeouted();}
+    ///Clears read timeout
     void clear_timeout() {(*this)->clear_timeout();}
+
+    ///Sets read timeout
+    /**
+     * @param tm_in_ms timeout in miliseconds
+     */
     void set_read_timeout(int tm_in_ms) {(*this)->set_read_timeout(tm_in_ms);}
+    ///Sets read timeout
+    /**
+     * @param tm_in_ms timeout in miliseconds
+     */
     void set_write_timeout(int tm_in_ms) {(*this)->set_write_timeout(tm_in_ms);}
+    ///Sets both read and write timeout
+    /**
+     * @param tm_in_ms timeout in miliseconds
+     */
     void set_io_timeout(int tm_in_ms) {(*this)->set_rw_timeout(tm_in_ms);}
+
+    ///Gets read timeout
     int get_read_timeout() const {return (*this)->get_read_timeout();}
+    ///Gets write timeout
     int get_write_timeout() const {return (*this)->get_write_timeout();}
-    std::size_t get_put_size() const {return (*this)->get_put_size();}
 
     static std::string_view extract_stream(std::istream &source, std::vector<char> &data) {
         source.seekg(0, std::ios::end);
@@ -256,9 +371,9 @@ public:
      *
      * @param callback callback function called when data are sent. Can be nullptr
      */
-    void write_async(std::istream &source, Callback<void(bool)> &&callback = nullptr) {
+    void write_async(std::istream &source, Callback<void(bool)> &&callback) {
         std::vector<char> data;
-        write_async(extract_stream(source, data),false, [callback = std::move(callback), data = std::move(data)](bool b) mutable {
+        write_async(extract_stream(source, data),[callback = std::move(callback), data = std::move(data)](bool b) mutable {
             if (callback != nullptr) callback(b);
         });
     }
@@ -347,7 +462,7 @@ public:
         }
         template<typename Fn>
         auto operator>>(Fn &&fn) -> decltype(std::declval<Fn>()(std::declval<bool>())) {
-            _owner->write_async(_buffer, _copy_content, std::forward<Fn>(fn));
+            _owner->write_async(_buffer, std::forward<Fn>(fn));
             _owner = nullptr;
         }
         ~WriteHelper() {
@@ -356,11 +471,9 @@ public:
     protected:
         typename PtrType::element_type * _owner;
         std::string_view _buffer;
-        bool _copy_content;
-        WriteHelper(const Stream_t &owner, const std::string_view &buffer, bool copy_content)
+        WriteHelper(const Stream_t &owner, const std::string_view &buffer)
             :_owner(owner.get())
-            ,_buffer(buffer)
-            ,_copy_content(copy_content) {}
+            ,_buffer(buffer) {}
         WriteHelper(const WriteHelper &other) = delete;
         WriteHelper &operator=(const WriteHelper &other) = delete;
         friend class Stream_t;
@@ -443,8 +556,8 @@ public:
      * stream.write(data) >> nullptr;
      * @endcode
      */
-    WriteHelper write(const std::string_view &buffer, bool copy_content = true) {
-        return WriteHelper(*this, buffer, copy_content);
+    WriteHelper write(const std::string_view &buffer) {
+        return WriteHelper(*this, buffer);
     }
 
 
@@ -483,6 +596,16 @@ public:
         return ReadBlockHelper(this, buffer, size);
     }
 
+
+    ///Retrieves buffered amount of written data
+    /**
+     * @return buffered amount. Note this feature is available for buffered streams only,
+     * otherwise function returns zero
+     */
+    std::size_t get_buffered_amount() const {
+        auto ptr = dynamic_cast<const IBufferedStreamInfo *>(PtrType::get());
+        if (ptr) return ptr->get_buffered_amount(); else return 0;
+    }
 
 protected:
     static auto find_separator(const std::string_view &text, const std::string_view &separator, std::size_t newdatapos) {
@@ -603,6 +726,21 @@ Stream createSocketStream(std::unique_ptr<ISocket> &&socket);
  *
  */
 Stream createStreamReference(Stream &stream);
+
+///Converts stream to buffered stream
+/**
+ * Buffered stream allows multi-threaded writes without need to wait on completion.
+ * Function write_async() can accept nullptr as callback function.
+ *
+ *
+ * @param stream non-buffered stream
+ * @return buffered stream
+ *
+ * @exception std::bad_cast if the underlying stream cannot be converted to buffered stream
+ *
+ * @note passed stream is moved - so it can be no longer used.;
+ */
+Stream createBufferedStream(Stream &&stream);
 
 
 }

@@ -57,7 +57,7 @@ void LimitedStream::read_async(Callback<void(std::string_view)> &&callback) {
     }
 }
 
-void LimitedStream::write_async(const std::string_view &buffer,bool copy_content, Callback<void(bool)> &&callback) {
+bool LimitedStream::write_async(const std::string_view &buffer,Callback<void(bool)> &&callback) {
     if ((write_limit-=buffer.size()) <0) {
         write_limit+=buffer.size();
         try {
@@ -65,8 +65,9 @@ void LimitedStream::write_async(const std::string_view &buffer,bool copy_content
         } catch (...) {
             callback(false);
         }
+        return false;
     } else {
-        _ref.write_async(buffer, copy_content, std::move(callback));
+        return _ref.write_async(buffer, std::move(callback));
     }
 }
 

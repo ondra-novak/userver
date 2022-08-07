@@ -122,16 +122,17 @@ std::vector<char> ChunkedStream::createChunk(const std::string_view &data) {
 
 }
 
-void ChunkedStream::write_async(const std::string_view &buffer, bool copy_content, Callback<void(bool)> &&callback) {
+bool ChunkedStream::write_async(const std::string_view &buffer, Callback<void(bool)> &&callback) {
     if (write_closed) {
         callback(false);
+        return false;
     }else if (buffer.empty()) {
-        //generate empty write cycle to achieve invoking the callback
-        _ref->write_async(buffer, false, std::move(callback));
+        callback(true);
+        return true;
     } else {
         auto chunk = createChunk(buffer);
         //pack data to chunk, do not copy content, we move chunk into callback
-        _ref->write_async(std::string_view(chunk.data(), chunk.size()), false,
+        return _ref->write_async(std::string_view(chunk.data(), chunk.size()),
              [chunk = std::move(chunk), cb = std::move(callback)](bool ok) mutable {
                 cb(ok);
         });
@@ -208,7 +209,7 @@ bool ChunkedStream::timeouted() {
 void ChunkedStream::close_output() {
     if (!write_closed) {
         write_closed = true;
-        _ref->write_async("0\r\n\r\n", false, nullptr);
+        _ref->write_sync("0\r\n\r\n");
     }
 }
 

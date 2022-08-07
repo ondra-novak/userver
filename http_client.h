@@ -443,7 +443,7 @@ inline void userver::HttpClientRequest::sendAsyncCont(Fn &&body, CallbackT<void(
             });
         } else {
             //body part is large enough, send it at once
-            s.write_async(data, true, [this,cb = std::move(cb), body = std::forward<Fn>(body)](bool ok) mutable {
+            s.write_async(data, [this,cb = std::move(cb), body = std::forward<Fn>(body)](bool ok) mutable {
                 if (!ok) cb(-1);
                 else sendAsyncCont(std::forward<Fn>(body), std::move(cb));
             });
