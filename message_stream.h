@@ -49,7 +49,8 @@ namespace userver {
  * You can send empty messages, but other side can have a problem to distinguish between
  * an empty message and the end of stream as the both situations are reported as an empty string
  * (with timeouted() = false). This can be handled by function is_empty_message() which
- * returns true if the returned empty string is actually an empty message (and not the end of stream)
+ * returns true if the returned empty string is actually an empty message (and not
+ * the end of stream)
  */
 template<typename T>
 class MessageStream: public BufferedStreamInstance<T> {
