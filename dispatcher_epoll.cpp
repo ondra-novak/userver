@@ -259,7 +259,7 @@ Dispatcher_EPoll::Callback Dispatcher_EPoll::stopWait(IAsyncResource &&resource)
           const SocketResource &res = static_cast<const SocketResource &>(resource);
           switch (res.op) {
               case SocketResource::read: return disarm(Op::read, res.socket);break;
-              case SocketResource::write: disarm(Op::write, res.socket);break;
+              case SocketResource::write: return disarm(Op::write, res.socket);break;
           }
     }
     return Callback();

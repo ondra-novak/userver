@@ -40,7 +40,9 @@ public:
 
 
 
-    virtual ~StreamInstance();
+    virtual ~StreamInstance() {
+        cleanup_pending();
+    }
 protected:  //content
 
 
@@ -245,6 +247,7 @@ protected:  //misc part
     virtual std::unique_ptr<AbstractStreamInstance> create_buffered();
 
 
+    void cleanup_pending();
 };
 
 
@@ -334,7 +337,7 @@ protected:
 
 
 template<typename T>
-inline userver::StreamInstance<T>::~StreamInstance() {
+inline void StreamInstance<T>::cleanup_pending() {
 
 	//disable read and signal pending read to not trigger promise yet
 	// however if there is no pending read (half_range + 1), no
@@ -351,8 +354,12 @@ inline userver::StreamInstance<T>::~StreamInstance() {
 			StreamInstance<T>::timeout_async_read();
 			//wait until promise is resolved
 			join_read.get_future().wait();
+
 		}
 	}
+
+	//no pending reads, you can reset the counter
+	_pending_read.store(0, std::memory_order_relaxed);
 
     //disable write and signal pending write to not trigger promise yet
     // however if there is no pending write (half_range + 1), no
@@ -369,8 +376,12 @@ inline userver::StreamInstance<T>::~StreamInstance() {
             StreamInstance<T>::timeout_async_write();
             //wait until promise is resolved
             join_write.get_future().wait();
+
         }
     }
+
+    //no pending writes, you can reset the counter
+    _pending_write.store(0, std::memory_order_relaxed);;
 }
 
 
@@ -415,6 +426,10 @@ public:
         return _buffer.size();
     }
 
+    virtual ~BufferedStreamInstance() {
+        this->cleanup_pending();
+    }
+
 protected:
 
     using FlushList = std::vector<Callback<void(bool)> >;
@@ -426,22 +441,27 @@ protected:
     bool _pending_write = false;
     bool _close_on_flush = false;
 
-    void finish_write(bool ok) {
+    void finish_write(bool ok, std::vector<char> &&buffer) {
         FlushList tmp;
         {
             std::lock_guard _(_mx);
             std::swap(tmp,_flush_list);
+            buffer.clear();
+            std::swap(buffer, _buffer);
             if (!ok) this->_write_error = true;
-            if (ok && !_buffer.empty()) {
-                std::string_view ss(_buffer.data(), _buffer.size());
+            if (ok && !buffer.empty()) {
+                std::string_view ss(buffer.data(), buffer.size());
                 StreamInstance<T>::write_async(ss,
-                               [=, b = std::move(_buffer), tmp = std::move(tmp)](bool ok) {
+                               [=, b = std::move(buffer), tmp = std::move(tmp)](bool ok) mutable{
                     for (const auto &cb : tmp) {
                         cb(ok);
                     }
-                    return finish_write(ok);
+                    return finish_write(ok, std::move(b));
                 });
             } else {
+                if (buffer.capacity() > 0 && buffer.capacity() < _buffer.capacity()) {
+                    std::swap(buffer, _buffer);
+                }
                 _pending_write = false;
                 if (_close_on_flush) StreamInstance<T>::close_output();
             }
@@ -457,9 +477,9 @@ protected:
             _pending_write = true;
             std::string_view ss(_buffer.data(), _buffer.size());
             StreamInstance<T>::write_async(ss,
-                    [=, b = std::move(_buffer), callback = std::move(callback)](bool ok){
+                    [=, b = std::move(_buffer), callback = std::move(callback)](bool ok) mutable{
                 if (callback != nullptr) callback(ok);
-                finish_write(ok);
+                finish_write(ok, std::move(b));
             });
         }
         return true;
