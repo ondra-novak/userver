@@ -408,8 +408,13 @@ public:
     }
     virtual bool write_async(const std::string_view &buffer, Callback<void(bool)> &&callback) {
         std::unique_lock _(_mx);
-        if (this->_write_error || _close_on_flush) return false;
-        return write_lk(buffer, std::move(callback));
+        if (!write_lk(buffer, std::move(callback))) {
+            _.unlock();
+            callback(false);
+            return false;
+        } else {
+            return true;
+        }
     }
 
     virtual void close_output() {
