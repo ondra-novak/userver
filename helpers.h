@@ -54,7 +54,6 @@ template<typename T, std::size_t n>
 class SmallVector {
 public:
 	SmallVector ():_size(0) {}
-	~SmallVector() {clear();}
 	bool empty() const {return _size == 0;}
 	std::size_t size() const {return _size;}
 	void push_back(T &&item) {
@@ -62,15 +61,8 @@ public:
 		new(getItemPtr(_size)) T(std::move(item));
 		_size++;
 	}
-    void push_back(const T &item) {
-        if (_size >= n) throw std::runtime_error("SmallVector: No room to store item");
-        new(getItemPtr(_size)) T(item);
-        _size++;
-    }
-	static constexpr auto capacity() {return n;}
 	T *begin() {return getItemPtr(0);}
 	T *end() {return getItemPtr(_size);}
-	const T *data() const {return getItemPtr(0);}
 	const T *begin()  const {return getItemPtr(0);}
 	const T *end() const {return getItemPtr(_size);}
 	void erase(const T *where) {
@@ -86,14 +78,6 @@ public:
 		}
 		_size--;
 	}
-	void clear() {
-	    for (std::size_t i = 0; i < _size; ++i) {
-	        getItemPtr(i)->~T();
-	    }
-	    _size = 0;
-	}
-
-
 
 protected:
 	std::size_t _size;
@@ -231,28 +215,6 @@ public:
 protected:
     std::shared_ptr<Land> land;
 
-};
-
-
-class RecursiveCounter{
-public:
-
-    RecursiveCounter() {
-        ++get_counter();
-    }
-    ~RecursiveCounter() {
-        --get_counter();
-    }
-    bool can_recursive() const {
-        return get_counter() < 10;
-    }
-
-
-protected:
-    static int &get_counter() {
-        static thread_local int counter = 0;
-        return counter;
-    }
 };
 
 using PendingOp = PendingOpT<std::mutex>;

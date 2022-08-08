@@ -87,6 +87,4 @@ void installScheduler(AsyncProvider a) {
     a->addDispatcher(std::make_unique<SchedulerDispatcher>());
 }
 
-std::atomic<ScheduledTaskID> At::glob_id;
-
 }

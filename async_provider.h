@@ -239,20 +239,23 @@ public:
 ///Configuration for asynchronous provider
 struct AsyncProviderConfig {
     ///count of socket dispatchers
-    unsigned int socket_dispatchers = 1;
+    int socket_dispatchers = 1;
     ///count of threads
     /** Default value is zero as in most cases, you want to have creation of threads under your
      * control. This means, you have to create own threads and each thread must call AsyncProvider::start_thread()
      *
      * Note that HttpServer expects this value filled in if the configuration is used to start the server.
-     * In this case, the HttpServer uses the value only as parameter, but initializes
+     * In this case, the HttpServer uses the value only as parameter, but inicializes
      * the dispatcher with zero threads and then creates own set of threads
      */
-    unsigned int threads = 0;
-    ///install scheduler
-    bool scheduler = true;
+    int threads = 0;
     ///force to use poll (default is epoll), for Windows WSAPoll is always used
     bool use_poll = false;
+    ///install scheduler
+    /** Scheduler needs extra thread. It is default false for compatibilty reason. You need
+     * to enable scheduler to use At and After classes
+     */
+    bool scheduler = false;
 
 };
 

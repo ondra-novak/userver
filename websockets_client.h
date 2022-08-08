@@ -5,138 +5,156 @@
  *      Author: ondra
  */
 
-
 #ifndef SRC_USERVER_WEBSOCKETS_CLIENT_H_
 #define SRC_USERVER_WEBSOCKETS_CLIENT_H_
-#include <userver/base64.h>
-#include <userver/http_exception.h>
 #include "http_client.h"
 #include "websockets_stream.h"
-#include "sha1.h"
 
 namespace userver {
 
-///WebSocket client
+
+inline std::optional<WSStream> wsConnect(HttpClient &httpclient, const HttpClient::URL &url, int *code_out = nullptr) {
+
+	if (code_out) *code_out = 0;
+	std::unique_ptr<HttpClientRequest> req = httpclient.open("GET", url);
+	if (req == nullptr) return {};
+	req->addHeader("Connection", "upgrade");
+	req->addHeader("Upgrade","websocket");
+	req->addHeader("Sec-WebSocket-Version","13");
+	req->addHeader("Sec-WebSocket-Key","dGhlIHNhbXBsZSBub25jZQ==");
+	int code = req->send();
+	if (code_out) *code_out = code;
+	if (code != 101) return {};
+	if (req->get("Upgrade") != "websocket") {
+		if (code_out) *code_out = -1;
+		return {};
+	}
+	return WSStream(std::move(req->getStream()), true);
+}
+
+template<typename Fn>
+void wsConnectAsync(HttpClient &httpclient, const HttpClient::URL &url, Fn &&callback) {
+	httpclient.open("GET", url) >> [callback = std::forward<Fn>(callback)](std::unique_ptr<HttpClientRequest> &&req) mutable {
+		if (req == nullptr) {
+		    std::optional<WSStream> ws;
+			callback(0, ws);
+		} else {
+			req->addHeader("Connection", "upgrade");
+			req->addHeader("Upgrade","websocket");
+			req->addHeader("Sec-WebSocket-Version","13");
+			req->addHeader("Sec-WebSocket-Key","dGhlIHNhbXBsZSBub25jZQ==");
+			auto r = req.get();
+			r->send() >> [callback = std::forward<Fn>(callback), req = std::move(req)](int status) mutable {
+			    std::optional<WSStream> ws;
+				if (status != 101) {
+					callback(status, ws);
+				} else if (req->get("Upgrade") != "websocket") {
+					callback(-1,ws);
+				} else {
+				    ws.emplace(std::move(req->getStream()), true);
+					callback(status, ws);
+				}
+
+			};
+		}
+	};
+}
+
+///Simple to use websocket client based on WSStream
 /**
- * Purpose of this class is to create WSStream by either synchronously or asynchronously.
- * Once the WSStream is created, the instance of this class has no longer use.
+ * To use this object, you need to create HttpClient and link the reference to httpclient
+ * in constructor. The instance must be valid before connect() is called, and must remain
+ * valid if the futher reconnects can happen
  *
- * @code
- * WebSocketClient(httpc, url) >> [](std::optional<WSStream> &&stream) {
- *      if (stream.has_value()) {
- *          //use stream here
- *      } else {
- *          auto exp = std::current_exception();
- *          //handle exception
- *      }
- * };
- * @endcode
+ * The client must be also initialized by one callback functions. see onMessage
+ *
+ * When connection is established, the message callback is called with event WSFrameType::init
+ * allows to handle perform an initial setup.
+ *
+ * If the connection stalls or disconnected, WSFrameType::incomplete is received. If connection
+ * is closed by peer, connClose event is reported,
+ *
+ * The client itself handles ping-pong messages and a valid response to connClose, so you don't
+ * need to bother.
+ *
+ * The client can be reused after connection is disconnected by disconnect().
  */
 class WebSocketClient {
 public:
-    using Headers = std::vector<std::pair<std::string, std::string> >;
 
-    WebSocketClient(HttpClient &httpclient, const std::string_view &url, Headers &&headers = Headers())
-        :_httpclient(httpclient), _url(url), _headers(std::move(headers)) {}
-    WebSocketClient(const WebSocketClient &other) = default;
-    WebSocketClient &operator=(const WebSocketClient &other) = delete;
+    using Message = WSStream::Message;
 
-    operator WSStream() const {
-        std::unique_ptr<HttpClientRequest> req = _httpclient.open("GET", _url);
-        if (req == nullptr) throw HttpStatusCodeException(-1,"Failed to connect");
-        std::string digest = setup_headers(req);
-        for (const auto &h: _headers) {
-            req->addHeader(h.first, h.second);
-        }
-        int code = req->send();
-        if (code != 101) {
-            throw HttpStatusCodeException(code,req->getStatusMessage());
-        }
-        if (HeaderValue::iequal(req->get("Upgrade") ,"websocket")
-            && req->get("Sec-WebSocket-Accept") == digest) {
-            return WSStream(std::move(req->getStream()), true);
-        } else {
-            throw HttpStatusCodeException(-2, "Invalid WebSocket handshake");
-        }
+    using MsgCallback = Callback<void(const Message &msg)>;
 
+    WebSocketClient(HttpClient &httpc):httpc(httpc) {}
+
+
+    ~WebSocketClient() {
+        disconnect();
     }
 
-    operator SharedWSStream() const {
-        WSStream s(*this);
-        return s.make_shared();
-    }
+    void connect(const std::string_view &url);
+    void disconnect();
+
+    bool send(WSFrameType type, std::string_view data);
+    void onMessage(MsgCallback &&cb);
 
 
-    template<typename Fn>
-    void operator>>(Fn &&cb) {
-        _httpclient.open("GET", _url) >> [cb = std::forward<Fn>(cb), headers = std::move(_headers)]
-                    (std::unique_ptr<HttpClientRequest> &&req) mutable {
-            try {
-                if (req == nullptr) throw HttpStatusCodeException(-1,"Failed to connect");
-                std::string digest = setup_headers(req);
-                for (const auto &h: headers) {
-                    req->addHeader(h.first, h.second);
-                }
-                req->send() >> [=, cb = std::forward<Fn>(cb),
-                                req = std::move(req)](int status) mutable {
-
-                    try {
-                        if (status != 101) {
-                            throw HttpStatusCodeException(req->getStatus(),req->getStatusMessage());
-                        }
-                        if (HeaderValue::iequal(req->get("Upgrade") ,"websocket")
-                                    && req->get("Sec-WebSocket-Accept") == digest) {
-                                    cb(WSStream(std::move(req->getStream()), true));
-                        } else {
-                            throw HttpStatusCodeException(-2, "Invalid WebSocket handshake");
-                        }
-                    } catch (...) {
-                        cb({});
-                    }
-                };
-
-
-            } catch (...) {
-                cb({});
-            }
-        };
-    }
-
-
+    WebSocketClient(const WebSocketClient &) = delete;
+    WebSocketClient &operator=(const WebSocketClient &) = delete;
 
 protected:
-    HttpClient &_httpclient;
-    std::string _url;
-    Headers _headers;
+    HttpClient &httpc;
+    std::string url;
+    std::recursive_mutex mx;
+    std::optional<WSStream> ws;
+    MsgCallback msgcb;
 
-    static std::string setup_headers(std::unique_ptr<HttpClientRequest> &req) {
-        std::random_device rnd;
-        std::uniform_int_distribution<char> dist(
-            std::numeric_limits<char>::min(),
-            std::numeric_limits<char>::max()
-        );
-        std::string rndkey;
-        for (int i = 0; i < 16; i++) {
-            rndkey.push_back(dist(rnd));
-        }
-        std::string b64key;
-        base64encode(rndkey, [&](char c){b64key.push_back(c);});
-        SHA1 sha1;
-        sha1.update(b64key);
-        sha1.update("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-        std::string digest=sha1.final();
-        std::string b64digest;
-        base64encode(digest, [&](char c){b64digest.push_back(c);});
-
-        req->addHeader("Connection", "Upgrade");
-        req->addHeader("Upgrade","websocket");
-        req->addHeader("Sec-WebSocket-Version","13");
-        req->addHeader("Sec-WebSocket-Key",b64key);
-
-        return b64digest;
-    }
+    PendingOp pending_connect;
 
 };
+
+inline void WebSocketClient::connect(const std::string_view &url) {
+    std::unique_lock _(mx);
+    pending_connect.cancel_clear(_);
+    ws.reset();
+    pending_connect.init();
+    wsConnectAsync(httpc, url, [=, pc = pending_connect](int status, std::optional<WSStream> &stream ) mutable {
+        pc >> [&] {
+            if (stream.has_value()) {
+                std::lock_guard _(mx);
+                ws.emplace(std::move(*stream));
+                pending_connect.clear();
+                if (msgcb != nullptr) msgcb({WSFrameType::init});
+                ws->recv() >> MsgCallback([=](MsgCallback &me, const Message &msg){
+                   if (msgcb != nullptr) msgcb(msg);
+                   ws->recv() >> std::move(me);
+                });
+            } else {
+                std::lock_guard _(mx);
+                pending_connect.clear();
+                if (msgcb != nullptr) msgcb(Message{WSFrameType::connClose,"",status});
+            }
+        };
+    });
+}
+
+inline void WebSocketClient::disconnect() {
+    std::unique_lock _(mx);
+    pending_connect.cancel_clear(_);
+    ws.reset();
+}
+
+inline void WebSocketClient::onMessage(MsgCallback &&cb) {
+    msgcb = std::move(cb);
+}
+
+inline bool WebSocketClient::send(WSFrameType type, std::string_view data) {
+    std::unique_lock _(mx);
+    if (!ws.has_value()) return false;
+    return ws->send(type, data);
+}
+
 
 }
 

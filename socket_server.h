@@ -42,6 +42,7 @@ public:
 	 * @retval false error - probably conflict on exit
 	 */
 	bool waitAcceptAsync(AsyncCallback &&callback);
+
 protected:
 	std::vector<SocketHandle> fds;
 	bool exit = false;

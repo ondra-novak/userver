@@ -165,6 +165,11 @@ bool Socket::timeouted() const {
 Socket::Socket(SocketHandle s):s(s) {
 }
 void Socket::read(void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
+	read2(buffer, size, std::move(fn), false);
+}
+
+
+void Socket::read2(void *buffer, std::size_t size, CallbackT<void(int)> &&fn, bool async) {
 #ifdef _WIN32
 	int r = recv(s, reinterpret_cast<char*>(buffer), static_cast<unsigned int>(size), 0);
 	if (r < 0) {
@@ -181,29 +186,27 @@ void Socket::read(void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
 					this->tm = true;
 					fn(0);
 				} else {
-					read(buffer, size,  std::move(fn));
+					read2(buffer, size,  std::move(fn), true);
 				}
 			}, readtm<0?std::chrono::system_clock::time_point::max()
 					 :std::chrono::system_clock::now()+std::chrono::milliseconds(readtm));
 		} else {
-			try {
-			    error(err,"socket read()");
-			} catch (...) {
-			    fn(-1);
-			}
+			error(err,"socket read()");
 		}
+	} else if (async) {
+		fn(r);
 	} else {
-	    RecursiveCounter cntr;
-	    if (cntr.can_recursive()) {
-	        fn(r);
-	    } else {
-            getCurrentAsyncProvider().runAsync([r, fn = std::move(fn)]() mutable {
-               fn(r);
-            });
-	    }
+		getCurrentAsyncProvider().runAsync([fn = std::move(fn),r]{
+			fn(r);
+		});
 	}
 }
 void Socket::write(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
+	write2(buffer, size, std::move(fn), false);
+}
+
+
+void Socket::write2(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn, bool async) {
 #ifdef _WIN32
 	int r = send(s, reinterpret_cast<const char*>(buffer), static_cast<unsigned int>(size), 0);
 	if (r < 0) {
@@ -220,7 +223,7 @@ void Socket::write(const void *buffer, std::size_t size, CallbackT<void(int)> &&
 					this->tm = true;
 					fn(0);
 				} else {
-					write(buffer, size, std::move(fn));
+					write2(buffer, size, std::move(fn), true);
 				}
 			}, writetm<0?std::chrono::system_clock::time_point::max()
 					:std::chrono::system_clock::now()+std::chrono::milliseconds(writetm));
@@ -231,15 +234,12 @@ void Socket::write(const void *buffer, std::size_t size, CallbackT<void(int)> &&
 				fn(-1);
 			}
 		}
+	} else if (async) {
+		fn(r);
 	} else {
-        RecursiveCounter cntr;
-        if (cntr.can_recursive()) {
-            fn(r);
-        } else {
-            getCurrentAsyncProvider().runAsync([r, fn = std::move(fn)]() mutable {
-               fn(r);
-            });
-        }
+		getCurrentAsyncProvider().runAsync([fn = std::move(fn),r]{
+			fn(r);
+		});
 	}
 }
 

@@ -49,7 +49,7 @@ public:
     template<typename Fn>
     At &operator>>(Fn &&fn) {
         AsyncProvider a = getCurrentAsyncProvider();
-        a->runAsync(SchedulerAsyncResource(id), [fn = std::forward<Fn>(fn)](bool) mutable {
+        a->runAsync(SchedulerAsyncResource(id), [fn = std::forward<Fn>(fn)](bool){
             fn();
         }, tp);
         return *this;

@@ -9,8 +9,6 @@
 
 #include "async_provider.h"
 #include "socket.h"
-#include "limited_stream.h"
-#include "chunked_stream.h"
 namespace userver {
 
 HttpClientRequest::HttpClientRequest(Stream &&s)
@@ -22,7 +20,10 @@ void HttpClientRequest::open(const std::string_view &method, const std::string_v
 	has_te = false;
 	has_te_chunked = false;
 	header_sent = false;
-    buff << method << " " << path << " HTTP/1.1\r\n";
+	s.writeNB(method);
+	s.writeNB(" ");
+	s.writeNB(path);
+	s.writeNB(" HTTP/1.1\r\n");
 	addHeader("Host",host);
 	head_method = HeaderValue::iequal(method, "HEAD");
 	this->host = host;
@@ -30,7 +31,10 @@ void HttpClientRequest::open(const std::string_view &method, const std::string_v
 
 void HttpClientRequest::addHeaderInternal(const std::string_view &key,
 		const std::string_view &value) {
-    buff << key << ": " << value << "\r\n";
+	s.writeNB(key);
+	s.writeNB(": ");
+	s.writeNB(value);
+	s.writeNB("\r\n");
 }
 
 void HttpClientRequest::addHeader(const std::string_view &key,
@@ -84,13 +88,13 @@ Stream& HttpClientRequest::beginBody() {
 	}
 	if (has_te) {
 		if (has_te_chunked) {
-			userStream.emplace(std::make_unique<ChunkedStream>(*s,true,false));
+			userStream.emplace(std::make_unique<ChunkedStream<Stream &> >(s,true,false));
 			return *userStream;
 		} else {
 			return s;
 		}
 	} else if (send_ctx_len.has_value()) {
-		userStream.emplace(std::make_unique<LimitedStream>(*s,0,*send_ctx_len));
+		userStream.emplace(std::make_unique<LimitedStream<Stream &> >(s,0,*send_ctx_len));
 		return *userStream;
 	} else {
 		return s;
@@ -100,8 +104,8 @@ Stream& HttpClientRequest::beginBody() {
 int HttpClientRequest::sendSync() {
 	if (!header_sent) finish_headers(false);
 	userStream.reset();
-	s.write_sync(buff);
-	if (s.get_line(responseBuffer, "\r\n\r\n") && parseResponse()) {
+	s.flush();
+	if (s.getLine(responseBuffer, "\r\n\r\n") && parseResponse()) {
 		prepareUserStream();
 	} else {
 		status = -1;
@@ -113,7 +117,7 @@ void HttpClientRequest::finish_headers(bool message) {
 	if (message && !has_te && !send_ctx_len.has_value()) {
 		addHeader("Transfer-Encoding","chunked");
 	}
-	buff << "\r\n";
+	s.writeNB("\r\n");
 	header_sent = true;
 }
 
@@ -124,13 +128,13 @@ void HttpClientRequest::prepareUserStream() {
 		HeaderValue ctl = get("Content-Length");
 		if (ctl.defined) {
 			std::size_t len = ctl.getUInt();
-			userStream.emplace(std::make_unique<LimitedStream>(*s, len, 0));
+			userStream.emplace(std::make_unique<LimitedStream<Stream &> >(s, len, 0));
 		} else {
 			HeaderValue te = get("Transfer-Encoding");
 			if (HeaderValue::iequal(te, "chunked")) {
-				userStream.emplace(std::make_unique<ChunkedStream>(*s,false, true));
+				userStream.emplace(std::make_unique<ChunkedStream<Stream &> >(s,false, true));
 			} else {
-				userStream.emplace(createStreamReference(s));
+				userStream.emplace(s.makeReference());
 			}
 		}
 	}
@@ -139,7 +143,7 @@ void HttpClientRequest::prepareUserStream() {
 void HttpClientRequest::sendAsync(CallbackT<void(int)> &&cb) {
 	if (!header_sent) finish_headers(true);
 	userStream.reset();
-	s.write_async(buff, [this, cb = std::move(cb)](bool ok) mutable {
+	s.flush()>>[this, cb = std::move(cb)](bool ok) mutable {
 		if (!ok) {
 			status = -1;
 			cb(status);
@@ -147,23 +151,18 @@ void HttpClientRequest::sendAsync(CallbackT<void(int)> &&cb) {
 			s.read() >> [this, cb = std::move(cb)](const std::string_view &data) mutable {
 				if (data.empty()) {
 					status = -1;
-					cb(status);
 				} else {
-					s.put_back(data);
-					s.get_line_async("\r\n\r\n", [this, cb = std::move(cb)](bool ok, std::string &line) mutable {
-					    responseBuffer = std::move(line);
-					    if (ok && parseResponse()) {
-					        prepareUserStream();
-					    } else {
-					        status = -1;
-					    }
-		                cb(status);
-					});
+					s.putBack(data);
+					if (s.getLine(responseBuffer, "\r\n\r\n") && parseResponse()) {
+						prepareUserStream();
+					} else {
+						status = -1;
+					}
 				}
-
+				cb(status);
 			};
 		}
-	});
+	};
 }
 
 Stream& HttpClientRequest::getResponse() {
@@ -323,7 +322,7 @@ std::unique_ptr<HttpClientRequest> HttpClient::openSync(const Method &method, co
 	}
 	if (socket == nullptr) return nullptr;
 
-	Stream stream(createSocketStream(std::move(socket)));
+	Stream stream(new SocketStream(std::move(socket)));
 	auto req = std::make_unique<HttpClientRequest>(std::move(stream));
 	req->open(method, cu.host, cu.path);
 	req->addHeader("User-Agent", cfg.userAgent);
@@ -370,7 +369,7 @@ void HttpClient::openAsync(const Method &method, const URL &url,Callback  &&call
 				if (socket==nullptr) {
 					clousure->cb(nullptr);
 				} else {
-					Stream stream(createSocketStream(std::move(socket)));
+					Stream stream(new SocketStream(std::move(socket)));
 					auto req = std::make_unique<HttpClientRequest>(std::move(stream));
 					req->open(clousure->method, cu.host, cu.path);
 					req->addHeader("UserAgent", cfg.userAgent);
@@ -502,10 +501,36 @@ HttpClient::HeaderList::HeaderList(const HeaderPair *lst, std::size_t count)
 HttpClient::HttpClient(HttpClientCfg &&cfg):cfg(std::move(cfg)) {
 }
 
+class StreamWrap: public AbstractStream {
+public:
+	StreamWrap(Stream &s, std::unique_ptr<HttpClientRequest> &&req):req(std::move(req)),s(s) {}
+
+	virtual std::string_view read() override {return s.read();}
+	virtual void readAsync(CallbackT<void(const std::string_view &data)> &&fn) override {
+		s.read() >> std::move(fn);
+	}
+	virtual void putBack(const std::string_view &pb) override {s.putBack(pb);}
+	virtual void write(const std::string_view &) override {}
+	virtual bool writeNB(const std::string_view &) override {return false;}
+	virtual void closeOutput() override  {}
+	virtual void closeInput() override  {s.closeInput();}
+	virtual void flush() override  {}
+	virtual void flushAsync(CallbackT<void(bool)> &&fn) override  {fn(false);}
+	virtual bool timeouted() const override  {return s.timeouted();}
+	virtual void clearTimeout() override  {s.clearTimeout();}
+	virtual std::size_t getOutputBufferSize() const override  {return s.getOutputBufferSize();}
+
+
+protected:
+	std::unique_ptr<HttpClientRequest> req;
+	Stream &s;
+
+
+};
 
 Stream HttpClientRequest::getResponseBody(std::unique_ptr<HttpClientRequest> &&req) {
 	Stream &s = req->getResponse();
-	return createStreamReference(s);
+	return Stream(new StreamWrap(s,std::move(req)));
 }
 
 const HttpClientRequest::HeaderMap& HttpClientRequest::getHeaders() {

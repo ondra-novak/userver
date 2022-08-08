@@ -180,14 +180,13 @@ Dispatcher_EPoll::Task Dispatcher_EPoll::getTask() {
 					iter = std::find_if(regs.begin(), regs.end(), [&](const Reg &rg){
 							return rg.op == Op::read;
 					});
-				} else if (ev.events & EPOLLOUT) {
+				} else if (ev.events & (EPOLLOUT|EPOLLERR)) {
 					iter = std::find_if(regs.begin(), regs.end(), [&](const Reg &rg){
 							return rg.op == Op::write;
 					});
 				}
 				if (iter == regs.end() && (ev.events & EPOLLERR)) {
-				    //if nothing selected but we have EPOLLERR, then select first callback to handle this
-					iter = regs.begin();
+					iter = regs.end();
 				}
 
 
@@ -259,7 +258,7 @@ Dispatcher_EPoll::Callback Dispatcher_EPoll::stopWait(IAsyncResource &&resource)
           const SocketResource &res = static_cast<const SocketResource &>(resource);
           switch (res.op) {
               case SocketResource::read: return disarm(Op::read, res.socket);break;
-              case SocketResource::write: return disarm(Op::write, res.socket);break;
+              case SocketResource::write: disarm(Op::write, res.socket);break;
           }
     }
     return Callback();
