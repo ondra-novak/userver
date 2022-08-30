@@ -11,6 +11,7 @@
 #include <memory>
 #include "helpers.h"
 #include "idispatcher.h"
+#include <optional>
 
 #ifndef SRC_MINISERVER_ASYNC_PROVIDER_H_
 #define SRC_MINISERVER_ASYNC_PROVIDER_H_

@@ -996,7 +996,7 @@ AsyncProvider HttpServer::getAsyncProvider() {
 
 HttpServer::~HttpServer() {
 	stop();
-	logger->close();
+	if (logger) logger->close();
 }
 
 void HttpServer::stop() {
@@ -1021,7 +1021,7 @@ void HttpServer::log(const HttpServerRequest &, const std::string_view &msg) noe
 
 void HttpServer::log(const HttpServerRequest &r, LogLevel, const std::string_view &msg) noexcept {
 	std::lock_guard _(lock);
-	log(r,msg);
+    buildLogMsg(std::cout, msg);
 }
 void HttpServer::error_page(HttpServerRequest &r, int status, const std::string_view &desc) noexcept {
 	std_error_page(r, status, desc);
