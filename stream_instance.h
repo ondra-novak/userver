@@ -479,13 +479,17 @@ protected:
         if (_pending_write) {
             if (callback != nullptr) _flush_list.push_back(std::move(callback));
         } else {
-            _pending_write = true;
-            std::string_view ss(_buffer.data(), _buffer.size());
-            StreamInstance<T>::write_async(ss,
-                    [=, b = std::move(_buffer), callback = std::move(callback)](bool ok) mutable{
-                if (callback != nullptr) callback(ok);
-                finish_write(ok, std::move(b));
-            });
+            if (_buffer.empty()) {
+                if (callback != nullptr) callback(true);
+            } else {
+                _pending_write = true;
+                std::string_view ss(_buffer.data(), _buffer.size());
+                StreamInstance<T>::write_async(ss,
+                        [=, b = std::move(_buffer), callback = std::move(callback)](bool ok) mutable{
+                    if (callback != nullptr) callback(ok);
+                    finish_write(ok, std::move(b));
+                });
+            }
         }
         return true;
     }
