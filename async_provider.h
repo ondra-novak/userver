@@ -9,6 +9,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <optional>
 #include "helpers.h"
 
 #ifndef SRC_MINISERVER_ASYNC_PROVIDER_H_
