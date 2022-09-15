@@ -500,6 +500,9 @@ HttpClient::HeaderList::HeaderList(const HeaderPair *lst, std::size_t count)
 :ptr(lst),count(count){}
 
 HttpClient::HttpClient(HttpClientCfg &&cfg):cfg(std::move(cfg)) {
+    if (this->cfg.userAgent.empty()) {
+        this->cfg.userAgent = "uServer/1.0 (+http://github.com/ondra-novak/userver)";        
+    }
 }
 
 
