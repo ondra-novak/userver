@@ -53,6 +53,7 @@ protected:  //read part
     bool _read_buffer_need_expand = true;
     std::string_view _put_back;
     std::atomic<int> _pending_read = 0;  //<non-zero means there is pending read active
+    std::thread::id _pending_read_thread; //<thread ID which is pending - only when _pending_read != 0
     std::promise<void> *_async_read_join = nullptr; //<used during destruction to join reads
     static constexpr int half_range = std::numeric_limits<int>::max()/2;
 
@@ -105,7 +106,8 @@ protected:  //read part
         		_async_read_join->set_value();
         	}
     	});
-    	if (_pending_read.fetch_add(1, std::memory_order_relaxed) >= half_range) { //this means, that reading is no more possible
+    	_pending_read_thread = std::this_thread::get_id();
+    	if (_pending_read.fetch_add(1, std::memory_order_release) >= half_range) { //this means, that reading is no more possible
     		clear_timeout(); //we are going to report eof, so timeout must be cleared
         	callback(std::string_view());
     	} else if (_put_back.empty()) {
@@ -146,6 +148,7 @@ protected:  //write part
 
 
     std::atomic<int> _pending_write = 0;
+    std::thread::id _pending_write_thread; //<thread ID which is pending - only when _pending_write != 0
     std::promise<void> *_async_write_join = nullptr; //<used during destruction to join writes
     std::atomic<bool> _write_error = false;
 #ifndef NDEBUG
@@ -173,7 +176,8 @@ protected:  //write part
     }
 
     virtual bool write_async(const std::string_view &buffer, Callback<void(bool)> &&callback) override {
-        if (_write_error.load(std::memory_order_relaxed)) {
+        _pending_write_thread = std::this_thread::get_id();
+        if (_write_error.load(std::memory_order_release)) {
             callback(false);
             return false;
         }
@@ -339,23 +343,27 @@ protected:
 template<typename T>
 inline void StreamInstance<T>::cleanup_pending() {
 
+    auto me = std::this_thread::get_id();
 	//disable read and signal pending read to not trigger promise yet
 	// however if there is no pending read (half_range + 1), no
 	//action is needed
 	//setting atomic to this value prevents further reading
-	if (_pending_read.fetch_add(half_range+1, std::memory_order_relaxed) > 0) {
-		//there is pending read, we must explicitly join
-		std::promise<void> join_read;
-		//set promise ptr
-		_async_read_join = &join_read;
-		//decrease 1 from pending read, and if there is some reading...
-		if (_pending_read.fetch_sub(1, std::memory_order_seq_cst)-1 > half_range) {
-			//interrupt it
-			StreamInstance<T>::timeout_async_read();
-			//wait until promise is resolved
-			join_read.get_future().wait();
-
-		}
+	if (_pending_read.fetch_add(half_range+1, std::memory_order_acquire) > 0) {
+	    //is it me? - if it is me, so no waiting is needed
+	    if (!(me == _pending_read_thread)) {
+            //there is pending read, we must explicitly join
+            std::promise<void> join_read;
+            //set promise ptr
+            _async_read_join = &join_read;
+            //decrease 1 from pending read, and if there is some reading...
+            if (_pending_read.fetch_sub(1, std::memory_order_seq_cst)-1 > half_range) {
+                //interrupt it
+                StreamInstance<T>::timeout_async_read();
+                //wait until promise is resolved
+                join_read.get_future().wait();
+    
+            }
+	    }
 	}
 
 	//no pending reads, you can reset the counter
@@ -365,18 +373,21 @@ inline void StreamInstance<T>::cleanup_pending() {
     // however if there is no pending write (half_range + 1), no
     //action is needed
     //setting atomic to this value prevents further writing
-    if (_pending_write.fetch_add(half_range+1, std::memory_order_relaxed) > 0) {
-        //there is pending read, we must explicitly join
-        std::promise<void> join_write;
-        //set promise ptr
-        _async_write_join = &join_write;
-        //decrease 1 from pending read, and if there is some reading...
-        if (_pending_write.fetch_sub(1, std::memory_order_seq_cst)-1 > half_range) {
-            //interrupt it
-            StreamInstance<T>::timeout_async_write();
-            //wait until promise is resolved
-            join_write.get_future().wait();
-
+    if (_pending_write.fetch_add(half_range+1, std::memory_order_acquire) > 0) {
+        //is it me? - if it is me, so no waiting is needed
+        if (!(me == _pending_write_thread)) {
+            //there is pending read, we must explicitly join
+            std::promise<void> join_write;
+            //set promise ptr
+            _async_write_join = &join_write;
+            //decrease 1 from pending read, and if there is some reading...
+            if (_pending_write.fetch_sub(1, std::memory_order_seq_cst)-1 > half_range) {
+                //interrupt it
+                StreamInstance<T>::timeout_async_write();
+                //wait until promise is resolved
+                join_write.get_future().wait();
+    
+            }
         }
     }
 
