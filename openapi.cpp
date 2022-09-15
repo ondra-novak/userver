@@ -284,7 +284,7 @@ void OpenAPIServer::generateDef(std::ostream &out, const std::string_view &root_
 	{
 		Obj paths(root.object("paths"));
 		std::string root (root_path);
-		for (const auto &p: this->paths) {
+		for (auto &p: this->paths) {
 			root.append(p.path);
 			Obj curpath( paths.object(root));
 			root.resize(root_path.size());
@@ -364,7 +364,7 @@ void OpenAPIServer::serializeSchema(_undefined::Obj &&obj, const Sch &param) {
 		obj("type","object");
 		if (!param.properties.empty()) {
 			Obj prop(obj.object("properties"));
-			for (const auto c: param.properties) {
+			for (auto c: param.properties) {
 				Obj n(prop.object(c.name));
 				serializeSchema(std::move(n), c);
 			}
@@ -373,7 +373,7 @@ void OpenAPIServer::serializeSchema(_undefined::Obj &&obj, const Sch &param) {
 		obj("type","string");
 		{
 			Arr arr (obj.array("enum"));
-			for (const auto c: param.properties) {
+			for (auto c: param.properties) {
 				arr << c.name;
 			}
 		}
@@ -385,7 +385,7 @@ void OpenAPIServer::serializeSchema(_undefined::Obj &&obj, const Sch &param) {
 				serializeSchema(std::move(items), param.properties[0]);
 			} else {
 				Arr anyOf(items.array("anyOf"));
-				for (const auto c: param.properties) {
+				for (auto c: param.properties) {
 					serializeSchema(anyOf.object(), c);
 				}
 			}
