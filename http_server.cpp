@@ -1052,7 +1052,9 @@ void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
 						PHttpServerRequest newreq = createRequest();
 						reuse_buffers(req,*newreq);
 						newreq->reuse_buffers(req);
-						beginRequest(std::move(s), std::move(newreq));
+						asyncProvider->runAsync([this,s = std::move(s),newreq=std::move(newreq)]() mutable {
+						        beginRequest(std::move(s), std::move(newreq));
+						});
 					});
 					try {
 						if (!execHandlerByHost(req)) {

@@ -45,6 +45,19 @@ public:
     }
 protected:  //content
 
+    static constexpr int exit_range = std::numeric_limits<int>::max()/2;
+
+    struct PendingOp { // @suppress("Miss copy constructor or assignment operator")
+        ///thread ID of currently running operation - valid when _count>0
+        std::thread::id _thread;
+        ///count of recursions - if >= half_range pending operation must exit as soon as possible
+        std::atomic<int> _count = 0;
+        ///when pending operation exiting, and this pointer is not-null, promise must be resolved
+        std::promise<void> *_join = nullptr;
+        ///pending op sets this pointer, destructor can set this flag so pending op know, that object was destroyed
+        std::atomic<bool *> _destroy_flag = nullptr;        
+    };
+    
 
     T _target;
 
@@ -52,10 +65,7 @@ protected:  //read part
     std::vector<char> _read_buffer;
     bool _read_buffer_need_expand = true;
     std::string_view _put_back;
-    std::atomic<int> _pending_read = 0;  //<non-zero means there is pending read active
-    std::thread::id _pending_read_thread; //<thread ID which is pending - only when _pending_read != 0
-    std::promise<void> *_async_read_join = nullptr; //<used during destruction to join reads
-    static constexpr int half_range = std::numeric_limits<int>::max()/2;
+    PendingOp _pending_read;
 
 #ifndef NDEBUG
     std::atomic<int> _reading = 0;
@@ -95,40 +105,95 @@ protected:  //read part
     }
 
 
+protected:
+    
+    class PendingGuard {
+    public:
+        //called when 
+        PendingGuard(PendingOp &op):_op(op),_prev_df(nullptr),_df(false) {
+            //retrieve current treead id
+            auto id = std::this_thread::get_id();
+            //retrieve id thread who used this stream before
+            auto prev_id = _op._thread;
+            //store new owner - there can be only one reading/writting owner            
+            _op._thread = id;
+            //store previous destroy flag
+            _prev_df = _op._destroy_flag;
+            //store pointer to destroy flag
+            _op._destroy_flag = &_df;      
+            //increase recursion count
+            auto r = op._count.fetch_add(1, std::memory_order_release);
+            //if exit flag is set, trigger need_exit
+            _need_exit = r >=exit_range;
+            //if we starting in different thread or previous recursion count was 0
+            //we don't have previous df
+            if ((r & ~exit_range) == 0 || !(id == prev_id)) {
+                _prev_df = nullptr;
+            }
+        }
+        ~PendingGuard() {
+            //get pointer to our df flag
+            bool *df = &_df;
+            if (!_df) {
+                //we can restore df flag if current is our,
+                //then put there previous one               
+                _op._destroy_flag.compare_exchange_strong(df,_prev_df);
+                //decrease recursion count
+                auto r = _op._count.fetch_sub(1, std::memory_order_relaxed)-1;;
+                //if exit flag, notify the future
+                if (r == exit_range) {
+                    _op._join->set_value();
+                }
+            } else if (_prev_df != nullptr) {
+                //destroy flag is set to true, instance has been destroyed
+                //this pointer is no longer valid, so do nothing
+                //howeve if there is prev_df, then set it also to true
+                //to carry information to parent guard
+                *_prev_df = true;
+            }
+        }
+        PendingGuard(const PendingGuard &) = delete;
+        PendingGuard &operator=(const PendingGuard &) = delete;
+
+        bool need_exit() const {return _need_exit;}
+    protected:
+        PendingOp &_op;
+        bool *_prev_df;
+        bool _df;
+        bool _need_exit;
+    };
+    
+public:
 
     virtual void read_async(Callback<void(std::string_view)> &&callback) override {
-    	//initialize trailer - handles decreasing pending reads and join the reading
-    	//trailer is executed when this function exits, but
-    	//can be carried to the async call
-    	auto t = ondra_shared::trailer([this]{
-        	if ((_pending_read.fetch_sub(1, std::memory_order_relaxed))-1 == half_range) {
-        	    _pending_read.fetch_add(0, std::memory_order_seq_cst);
-        		_async_read_join->set_value();
-        	}
-    	});
-    	_pending_read_thread = std::this_thread::get_id();
-    	if (_pending_read.fetch_add(1, std::memory_order_release) >= half_range) { //this means, that reading is no more possible
-    		clear_timeout(); //we are going to report eof, so timeout must be cleared
-        	callback(std::string_view());
-    	} else if (_put_back.empty()) {
-				if (_read_buffer_need_expand) {
-					expand_read_buffer();
-					_read_buffer_need_expand = false;
-				}
+        PendingGuard g(_pending_read);
+        if (g.need_exit()) {
+            clear_timeout(); //we are going to report eof, so timeout must be cleared
+            callback(std::string_view());
+            return;
+        }
+        if (!_put_back.empty()) {
+            callback(StreamInstance::read_sync_nb());
+            return;
+        }
+        if (_read_buffer_need_expand) {
+            expand_read_buffer();
+            _read_buffer_need_expand = false;
+        }
 #ifndef NDEBUG
             assert(_reading.fetch_add(1, std::memory_order_relaxed) == 0); //multiple pending reading
 #endif
-				_target.read(_read_buffer.data(), _read_buffer.size(),
-						[this, cb = std::move(callback), t= std::move(t)] (int r){
+        _target.read(_read_buffer.data(), _read_buffer.size(),
+                [this, cb = std::move(callback)] (int r){
+        
 #ifndef NDEBUG
             _reading.fetch_sub(1, std::memory_order_relaxed);
 #endif
-					_read_buffer_need_expand = static_cast<std::size_t>(r) == _read_buffer.size();
-					cb(std::string_view(_read_buffer.data(), r));
-				});
-		} else {
-			callback(StreamInstance::read_sync_nb());
-		}
+            _read_buffer_need_expand = static_cast<std::size_t>(r) == _read_buffer.size();
+            PendingGuard g(_pending_read);
+            cb(std::string_view(_read_buffer.data(), r));
+        });
+        
     }
 
     virtual void put_back(const std::string_view &buffer) override {
@@ -146,10 +211,7 @@ protected:  //read part
 
 protected:  //write part
 
-
-    std::atomic<int> _pending_write = 0;
-    std::thread::id _pending_write_thread; //<thread ID which is pending - only when _pending_write != 0
-    std::promise<void> *_async_write_join = nullptr; //<used during destruction to join writes
+    PendingOp _pending_write;
     std::atomic<bool> _write_error = false;
 #ifndef NDEBUG
     std::atomic<int> _writing= 0;
@@ -175,8 +237,7 @@ protected:  //write part
         return true;
     }
 
-    virtual bool write_async(const std::string_view &buffer, Callback<void(bool)> &&callback) override {
-        _pending_write_thread = std::this_thread::get_id();
+    virtual bool write_async(const std::string_view &buffer, Callback<void(bool)> &&callback) override {        
         if (_write_error.load(std::memory_order_release)) {
             callback(false);
             return false;
@@ -186,26 +247,24 @@ protected:  //write part
             return !_write_error.load(std::memory_order_relaxed);
         }
 
-        auto t = ondra_shared::trailer([this]{
-            if ((_pending_write.fetch_sub(1, std::memory_order_relaxed))-1 == half_range) {
-                _pending_write.fetch_add(0, std::memory_order_seq_cst);
-                _async_write_join->set_value();
-            }
-        });
-
-        if (_pending_write.fetch_add(1, std::memory_order_relaxed) >= half_range) {
+        PendingGuard g(_pending_write);
+        if (g.need_exit()) {
             callback(false);
-            return false;
+            return true;
         }
 
 #ifndef NDEBUG
             assert(_writing.fetch_add(1, std::memory_order_relaxed) == 0); //multiple pending reading
 #endif
         _target.write(buffer.data(), buffer.size(),
-                 [this, t = std::move(t), buffer = std::string_view(buffer), callback = std::move(callback)](int r) mutable {
+                 [this, buffer = std::string_view(buffer), callback = std::move(callback)](int r) mutable {
 #ifndef NDEBUG
             _writing.fetch_sub(1, std::memory_order_relaxed);
 #endif
+            PendingGuard g(_pending_write);
+            if (g.need_exit()) {
+                callback(false);
+            }
             if (r>0) {
                 std::size_t len = r;
                 if (len < buffer.size()) {
@@ -344,55 +403,62 @@ template<typename T>
 inline void StreamInstance<T>::cleanup_pending() {
 
     auto me = std::this_thread::get_id();
-	//disable read and signal pending read to not trigger promise yet
-	// however if there is no pending read (half_range + 1), no
-	//action is needed
-	//setting atomic to this value prevents further reading
-	if (_pending_read.fetch_add(half_range+1, std::memory_order_acquire) > 0) {
-	    //is it me? - if it is me, so no waiting is needed
-	    if (!(me == _pending_read_thread)) {
+    //disable read and signal pending read to not trigger promise yet
+    // however if there is no pending read (half_range + 1), no
+    //action is needed
+    //setting atomic to this value prevents further reading
+    if (_pending_read._count.fetch_add(exit_range+1, std::memory_order_acquire) > 0) {
+        //is it me? - if it is me, so no waiting is needed
+        if (!(me == _pending_read._thread)) {
             //there is pending read, we must explicitly join
             std::promise<void> join_read;
             //set promise ptr
-            _async_read_join = &join_read;
+            _pending_read._join = &join_read;
             //decrease 1 from pending read, and if there is some reading...
-            if (_pending_read.fetch_sub(1, std::memory_order_seq_cst)-1 > half_range) {
+            if (_pending_read._count.fetch_sub(1, std::memory_order_seq_cst)-1 > exit_range) {
                 //interrupt it
                 StreamInstance<T>::timeout_async_read();
                 //wait until promise is resolved
                 join_read.get_future().wait();
     
             }
-	    }
-	}
+        } else {
+            //it is me - send to stack above info about destruction of this object 
+            if (_pending_read._destroy_flag) {
+                *_pending_read._destroy_flag = true;
+            }
+        }
+    }
 
-	//no pending reads, you can reset the counter
-	_pending_read.store(0, std::memory_order_relaxed);
+    //no pending reads, you can reset the counter
+    _pending_read._count.store(0, std::memory_order_relaxed);
 
     //disable write and signal pending write to not trigger promise yet
     // however if there is no pending write (half_range + 1), no
     //action is needed
     //setting atomic to this value prevents further writing
-    if (_pending_write.fetch_add(half_range+1, std::memory_order_acquire) > 0) {
+    if (_pending_write._count.fetch_add(exit_range+1, std::memory_order_acquire) > 0) {
         //is it me? - if it is me, so no waiting is needed
-        if (!(me == _pending_write_thread)) {
+        if (!(me == _pending_write._thread)) {
             //there is pending read, we must explicitly join
             std::promise<void> join_write;
             //set promise ptr
-            _async_write_join = &join_write;
+            _pending_write._join= &join_write;
             //decrease 1 from pending read, and if there is some reading...
-            if (_pending_write.fetch_sub(1, std::memory_order_seq_cst)-1 > half_range) {
+            if (_pending_write._count.fetch_sub(1, std::memory_order_seq_cst)-1 > exit_range) {
                 //interrupt it
                 StreamInstance<T>::timeout_async_write();
                 //wait until promise is resolved
                 join_write.get_future().wait();
     
             }
+        } else {
+            if (_pending_read._destroy_flag)  *_pending_write._destroy_flag = true;
         }
     }
 
     //no pending writes, you can reset the counter
-    _pending_write.store(0, std::memory_order_relaxed);;
+    _pending_write._count.store(0, std::memory_order_relaxed);;
 }
 
 
