@@ -349,15 +349,11 @@ public:
 
 protected:
 
-    using FlushList = std::vector<Callback<void(bool)> >;
 
     WebSocketParser _parser;
     WebSocketSerializer _serializer;
     mutable std::recursive_mutex _mx;
     std::atomic<unsigned int> _close_code = 0;
-    std::vector<char> _buffer;
-    FlushList _flush_list;
-    bool _pending_write = false;
     Stream _s;
 
 
@@ -368,7 +364,6 @@ protected:
     template<typename Fn>
     void recv_async_loop2(Fn &&fn, bool ping_sent);
 
-    void finish_write(bool ok);
     bool send_frame(const std::string_view &frame);
 
 };
@@ -481,11 +476,12 @@ inline void WSStream_Impl::recv_async_loop2(Fn &&fn, bool ping_sent) {
                         recv_async_loop2(std::forward<Fn>(fn), true);
                     }                    
                     return;
-                case WSFrameType::incomplete:
+                case WSFrameType::incomplete: {
                     unsigned int need = 0;
                     _close_code.compare_exchange_strong(need, closeConnReset, std::memory_order_relaxed);
                     fn(get_close_message());
                     return;
+                }
                 case WSFrameType::ping:
                 case WSFrameType::pong:
                         break;
@@ -540,14 +536,12 @@ inline bool WSStream_Impl::send_close(int code) {
 }
 
 inline std::size_t WSStream_Impl::get_buffered_amount() const {
-    std::lock_guard _(_mx);
-    return  _buffer.size();
+    return _s.get_buffered_amount();
 }
 
 template<typename Fn>
 void WSStream_Impl::flush_async(Fn &&cb) {
-    std::lock_guard _(_mx);
-    _flush_list.push_back(std::forward<Fn>(cb));
+    _s.write(std::string_view()) >> std::forward<Fn>(cb);
 }
 
 
@@ -586,7 +580,7 @@ inline void WSStream_Impl::handle_special_message(const Message &msg) {
 }
 
 inline WSStream_Impl::WSStream_Impl(Stream &&s, bool client)
-:_serializer(client),_s(std::move(s))  {}
+:_serializer(client),_s(userver::createBufferedStream(std::move(s)))  {}
 
 inline WSStream_Impl::WSStream_Impl(WSStream_Impl &&other)
 : _parser(std::move(other._parser))
@@ -595,35 +589,9 @@ inline WSStream_Impl::WSStream_Impl(WSStream_Impl &&other)
 {
 }
 
-inline void WSStream_Impl::finish_write(bool ok) {
-    FlushList tmp;
-    {
-        std::lock_guard _(_mx);
-        std::swap(tmp,_flush_list);
-        unsigned int zero = 0;
-        if (!ok) _close_code.compare_exchange_strong(zero, closeConnReset,std::memory_order_relaxed);
-        if (ok && !_buffer.empty()) {
-            _s.write_async(std::string_view(_buffer.data(), _buffer.size()),
-                           [=, b = std::move(_buffer)](bool ok) {
-                return finish_write(ok);
-            });
-        } else {
-            _pending_write = false;
-        }
-    }
-    for (const auto &cb : tmp) {
-        cb(ok);
-    }
-}
-
 inline bool WSStream_Impl::send_frame(const std::string_view &frame) {
     if (_close_code.load(std::memory_order_relaxed)) return false;
-    if (_pending_write) {
-        _buffer.insert(_buffer.end(), frame.begin(), frame.end());
-    } else {
-        _pending_write = true;
-        _s.write_async(frame, [=](bool ok){finish_write(ok);});
-    }
+    _s.write_async(frame, nullptr);
     return true;
 }
 

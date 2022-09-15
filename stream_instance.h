@@ -104,8 +104,12 @@ protected:  //read part
         _target.read(_read_buffer.data(), _read_buffer.size(),
                 [this, cb = std::move(callback)] (int r){
         
-            _read_buffer_need_expand = static_cast<std::size_t>(r) == _read_buffer.size();
-            cb(std::string_view(_read_buffer.data(), r));
+            if (r == 0 && _target.timeouted()) {
+                cb(ReadData(ReadData::timeout));
+            } else {
+                _read_buffer_need_expand = static_cast<std::size_t>(r) == _read_buffer.size();
+                cb(ReadData(_read_buffer.data(), r));
+            }
         });
         
     }
@@ -321,7 +325,7 @@ public:
         std::unique_lock _(_mx);
         if (!write_lk(buffer, std::move(callback))) {
             _.unlock();
-            callback(false);
+            if (callback != nullptr) callback(false);
             return false;
         } else {
             return true;
@@ -358,7 +362,7 @@ protected:
 
 
     mutable std::recursive_mutex _mx;
-    std::condition_variable_any *_exit_wait;
+    std::condition_variable_any *_exit_wait = nullptr;
     std::vector<char> _buffer;
     FlushList _flush_list;
     bool _pending_write = false;
