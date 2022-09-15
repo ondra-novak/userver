@@ -40,23 +40,9 @@ public:
 
 
 
-    virtual ~StreamInstance() {
-        cleanup_pending();
-    }
 protected:  //content
 
     static constexpr int exit_range = std::numeric_limits<int>::max()/2;
-
-    struct PendingOp { // @suppress("Miss copy constructor or assignment operator")
-        ///thread ID of currently running operation - valid when _count>0
-        std::thread::id _thread;
-        ///count of recursions - if >= half_range pending operation must exit as soon as possible
-        std::atomic<int> _count = 0;
-        ///when pending operation exiting, and this pointer is not-null, promise must be resolved
-        std::promise<void> *_join = nullptr;
-        ///pending op sets this pointer, destructor can set this flag so pending op know, that object was destroyed
-        std::atomic<bool *> _destroy_flag = nullptr;        
-    };
     
 
     T _target;
@@ -65,7 +51,6 @@ protected:  //read part
     std::vector<char> _read_buffer;
     bool _read_buffer_need_expand = true;
     std::string_view _put_back;
-    PendingOp _pending_read;
 
 #ifndef NDEBUG
     std::atomic<int> _reading = 0;
@@ -78,7 +63,7 @@ protected:  //read part
         _read_buffer.resize(sz, 0);
     }
 
-    virtual std::string_view read_sync() override {
+    virtual ReadData read_sync() override {
         if (_put_back.empty()) {
             if (_read_buffer_need_expand) {
                 expand_read_buffer();
@@ -92,7 +77,8 @@ protected:  //read part
             _reading.fetch_sub(1, std::memory_order_relaxed);
 #endif
             _read_buffer_need_expand = r == _read_buffer.size();
-            return std::string_view(_read_buffer.data(), r);
+            if (r == 0 && _target.timeouted()) return ReadData(ReadData::timeout);
+            return ReadData(_read_buffer.data(), r);
         } else {
             return StreamInstance::read_sync_nb();
         }
@@ -105,73 +91,8 @@ protected:  //read part
     }
 
 
-protected:
-    
-    class PendingGuard {
-    public:
-        //called when 
-        PendingGuard(PendingOp &op):_op(op),_prev_df(nullptr),_df(false) {
-            //retrieve current treead id
-            auto id = std::this_thread::get_id();
-            //retrieve id thread who used this stream before
-            auto prev_id = _op._thread;
-            //store new owner - there can be only one reading/writting owner            
-            _op._thread = id;
-            //store previous destroy flag
-            _prev_df = _op._destroy_flag;
-            //store pointer to destroy flag
-            _op._destroy_flag = &_df;      
-            //increase recursion count
-            auto r = op._count.fetch_add(1, std::memory_order_release);
-            //if exit flag is set, trigger need_exit
-            _need_exit = r >=exit_range;
-            //if we starting in different thread or previous recursion count was 0
-            //we don't have previous df
-            if ((r & ~exit_range) == 0 || !(id == prev_id)) {
-                _prev_df = nullptr;
-            }
-        }
-        ~PendingGuard() {
-            //get pointer to our df flag
-            bool *df = &_df;
-            if (!_df) {
-                //we can restore df flag if current is our,
-                //then put there previous one               
-                _op._destroy_flag.compare_exchange_strong(df,_prev_df);
-                //decrease recursion count
-                auto r = _op._count.fetch_sub(1, std::memory_order_relaxed)-1;;
-                //if exit flag, notify the future
-                if (r == exit_range) {
-                    _op._join->set_value();
-                }
-            } else if (_prev_df != nullptr) {
-                //destroy flag is set to true, instance has been destroyed
-                //this pointer is no longer valid, so do nothing
-                //howeve if there is prev_df, then set it also to true
-                //to carry information to parent guard
-                *_prev_df = true;
-            }
-        }
-        PendingGuard(const PendingGuard &) = delete;
-        PendingGuard &operator=(const PendingGuard &) = delete;
 
-        bool need_exit() const {return _need_exit;}
-    protected:
-        PendingOp &_op;
-        bool *_prev_df;
-        bool _df;
-        bool _need_exit;
-    };
-    
-public:
-
-    virtual void read_async(Callback<void(std::string_view)> &&callback) override {
-        PendingGuard g(_pending_read);
-        if (g.need_exit()) {
-            clear_timeout(); //we are going to report eof, so timeout must be cleared
-            callback(std::string_view());
-            return;
-        }
+    virtual void read_async(Callback<void(const ReadData &)> &&callback) override {
         if (!_put_back.empty()) {
             callback(StreamInstance::read_sync_nb());
             return;
@@ -180,17 +101,10 @@ public:
             expand_read_buffer();
             _read_buffer_need_expand = false;
         }
-#ifndef NDEBUG
-            assert(_reading.fetch_add(1, std::memory_order_relaxed) == 0); //multiple pending reading
-#endif
         _target.read(_read_buffer.data(), _read_buffer.size(),
                 [this, cb = std::move(callback)] (int r){
         
-#ifndef NDEBUG
-            _reading.fetch_sub(1, std::memory_order_relaxed);
-#endif
             _read_buffer_need_expand = static_cast<std::size_t>(r) == _read_buffer.size();
-            PendingGuard g(_pending_read);
             cb(std::string_view(_read_buffer.data(), r));
         });
         
@@ -211,7 +125,6 @@ public:
 
 protected:  //write part
 
-    PendingOp _pending_write;
     std::atomic<bool> _write_error = false;
 #ifndef NDEBUG
     std::atomic<int> _writing= 0;
@@ -247,24 +160,9 @@ protected:  //write part
             return !_write_error.load(std::memory_order_relaxed);
         }
 
-        PendingGuard g(_pending_write);
-        if (g.need_exit()) {
-            callback(false);
-            return true;
-        }
 
-#ifndef NDEBUG
-            assert(_writing.fetch_add(1, std::memory_order_relaxed) == 0); //multiple pending reading
-#endif
         _target.write(buffer.data(), buffer.size(),
                  [this, buffer = std::string_view(buffer), callback = std::move(callback)](int r) mutable {
-#ifndef NDEBUG
-            _writing.fetch_sub(1, std::memory_order_relaxed);
-#endif
-            PendingGuard g(_pending_write);
-            if (g.need_exit()) {
-                callback(false);
-            }
             if (r>0) {
                 std::size_t len = r;
                 if (len < buffer.size()) {
@@ -348,7 +246,7 @@ public:
     virtual void put_back(const std::string_view &buffer) override {ref.put_back(buffer);}
     virtual void timeout_async_write() override {ref.timeout_async_write();}
     virtual void read_async(
-            userver::Callback<void(std::basic_string_view<char>)> &&callback)
+            userver::Callback<void(const ReadData &)> &&callback)
                     override {ref.read_async(std::move(callback));}
     virtual bool write_async(const std::string_view &buffer,
             userver::Callback<void(bool)> &&callback) override {
@@ -357,7 +255,7 @@ public:
     virtual int get_read_timeout() const override {
         return ref.get_read_timeout();
     }
-    virtual std::string_view read_sync() override {
+    virtual ReadData read_sync() override {
         return ref.read_sync();
     }
     virtual std::string_view read_sync_nb() override {
@@ -371,9 +269,6 @@ public:
     }
     virtual void close_input() override {
         ref.close_input();
-    }
-    virtual bool timeouted() override {
-        return ref.timeouted();
     }
     virtual void close_output() override {
         ref.close_output();
@@ -399,67 +294,6 @@ protected:
 
 
 
-template<typename T>
-inline void StreamInstance<T>::cleanup_pending() {
-
-    auto me = std::this_thread::get_id();
-    //disable read and signal pending read to not trigger promise yet
-    // however if there is no pending read (half_range + 1), no
-    //action is needed
-    //setting atomic to this value prevents further reading
-    if (_pending_read._count.fetch_add(exit_range+1, std::memory_order_acquire) > 0) {
-        //is it me? - if it is me, so no waiting is needed
-        if (!(me == _pending_read._thread)) {
-            //there is pending read, we must explicitly join
-            std::promise<void> join_read;
-            //set promise ptr
-            _pending_read._join = &join_read;
-            //decrease 1 from pending read, and if there is some reading...
-            if (_pending_read._count.fetch_sub(1, std::memory_order_seq_cst)-1 > exit_range) {
-                //interrupt it
-                StreamInstance<T>::timeout_async_read();
-                //wait until promise is resolved
-                join_read.get_future().wait();
-    
-            }
-        } else {
-            //it is me - send to stack above info about destruction of this object 
-            if (_pending_read._destroy_flag) {
-                *_pending_read._destroy_flag = true;
-            }
-        }
-    }
-
-    //no pending reads, you can reset the counter
-    _pending_read._count.store(0, std::memory_order_relaxed);
-
-    //disable write and signal pending write to not trigger promise yet
-    // however if there is no pending write (half_range + 1), no
-    //action is needed
-    //setting atomic to this value prevents further writing
-    if (_pending_write._count.fetch_add(exit_range+1, std::memory_order_acquire) > 0) {
-        //is it me? - if it is me, so no waiting is needed
-        if (!(me == _pending_write._thread)) {
-            //there is pending read, we must explicitly join
-            std::promise<void> join_write;
-            //set promise ptr
-            _pending_write._join= &join_write;
-            //decrease 1 from pending read, and if there is some reading...
-            if (_pending_write._count.fetch_sub(1, std::memory_order_seq_cst)-1 > exit_range) {
-                //interrupt it
-                StreamInstance<T>::timeout_async_write();
-                //wait until promise is resolved
-                join_write.get_future().wait();
-    
-            }
-        } else {
-            if (_pending_read._destroy_flag)  *_pending_write._destroy_flag = true;
-        }
-    }
-
-    //no pending writes, you can reset the counter
-    _pending_write._count.store(0, std::memory_order_relaxed);;
-}
 
 
 template<typename T>
@@ -508,8 +342,14 @@ public:
         return _buffer.size();
     }
 
-    virtual ~BufferedStreamInstance() {
-        this->cleanup_pending();
+    ~BufferedStreamInstance() {
+        std::condition_variable_any waiter;
+        std::unique_lock _(_mx);
+        if (_pending_write) {
+            _exit_wait = &waiter;
+            this->timeout_async_write();
+            waiter.wait(_, [&]{return !_pending_write ;});
+        }
     }
 
 protected:
@@ -518,6 +358,7 @@ protected:
 
 
     mutable std::recursive_mutex _mx;
+    std::condition_variable_any *_exit_wait;
     std::vector<char> _buffer;
     FlushList _flush_list;
     bool _pending_write = false;
@@ -545,6 +386,7 @@ protected:
                     std::swap(buffer, _buffer);
                 }
                 _pending_write = false;
+                if (_exit_wait) _exit_wait->notify_one();
                 if (_close_on_flush) StreamInstance<T>::close_output();
             }
         }

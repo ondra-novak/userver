@@ -38,7 +38,9 @@ enum class WSFrameType {
      *
      * This frame has no data
      */
-    init
+    init,
+    ///not actual message, only informs, that reading message timeouted
+    timeout,
 };
 
 

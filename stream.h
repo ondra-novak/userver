@@ -19,12 +19,28 @@
 namespace userver {
 
 
+class ReadData: public std::string_view {
+public:
+    enum _Timeout {timeout};
+    
+    using std::string_view::string_view;
+    ReadData(const std::string_view &x):std::string_view(x) {}
+    ReadData(_Timeout): _timeouted(true) {}
+    
+    bool is_timeouted() const {return _timeouted;}
+    
+protected:
+    bool _timeouted = false;
+    
+};
+
 class AbstractStreamInstance {
 public:
     virtual ~AbstractStreamInstance() = default;
 
-
-
+    
+    
+    
     //reading interface
 
      /// Read stream synchronously.
@@ -38,7 +54,7 @@ public:
      * @note function is not MT Safe for reading side, so only one thread can reat at
      * time - applies both sync or async
      */
-    virtual std::string_view read_sync() = 0;
+    virtual ReadData read_sync() = 0;
 
     /// Read synchronously without blocking
     /**
@@ -67,7 +83,7 @@ public:
      * the exception pointer is not set, there were timeout out or EOF
      *
      */
-    virtual void read_async(Callback<void(std::string_view)> &&callback) = 0;
+    virtual void read_async(Callback<void(const ReadData &)> &&callback) = 0;
 
     ///Puts back unprocessed input
     /**
@@ -152,14 +168,6 @@ public:
     virtual void timeout_async_write() = 0;
 
 
-    //misc
-    ///Determines, whether read operation timeouted
-    /**
-     * @retval true operation timeouted, you can call clear_timeout() to continue
-     * @retval false operation was not timeouted, probably error or eof, calling clear_timeout()
-     * will not help
-     */
-    virtual bool timeouted() = 0;
     virtual void clear_timeout() = 0;
 
 
@@ -321,16 +329,6 @@ public:
      */
     void close_output() {(*this)->close_output();}
 
-    ///Determines, whether reading timeouted
-    /**
-     * @retval true reading timeouted. You need to call clear_timeout(), to continue reading
-     * @retval false no timeout detected, so if you received empty buffer, it is end of stream
-     *
-     * @note There is no such function for writing. If writing timeouts, the stream is
-     * considered as disconnected
-     *
-     */
-    bool timeouted() const {return (*this)->timeouted();}
     ///Clears read timeout
     void clear_timeout() {(*this)->clear_timeout();}
 

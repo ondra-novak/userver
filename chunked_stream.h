@@ -32,16 +32,15 @@ public:
 
     virtual void put_back(const std::string_view &buffer) override;
     virtual void timeout_async_write() override;
-    virtual void read_async(Callback<void(std::string_view)> &&callback) override;
+    virtual void read_async(Callback<void(const ReadData &)> &&callback) override;
     virtual bool write_async(const std::string_view &buffer,
                 Callback<void(bool)> &&callback) override;
     virtual int get_read_timeout() const override;
-    virtual std::string_view read_sync() override;
+    virtual ReadData read_sync() override;
     virtual std::string_view read_sync_nb() override;
     virtual void clear_timeout() override;
     virtual int get_write_timeout() const override;
     virtual void close_input() override;
-    virtual bool timeouted() override;
     virtual void close_output() override;
     virtual void set_rw_timeout(int tm_in_ms) override;
     virtual void set_read_timeout(int tm_in_ms) override;

@@ -345,7 +345,6 @@ public:
     std::future<bool> flush();
     template<typename Fn>
     void flush_async(Fn &&cb);
-    bool timeouted() const;
     void clear_timeout();
 
 protected:
@@ -436,8 +435,10 @@ inline void WSStream_Impl::recv_async(Fn &&fn) {
     if (_close_code.load(std::memory_order_relaxed)) {
         fn(get_close_message());
     } else {
-        _s.read() >> [=, fn = std::forward<Fn>(fn)](const std::string_view &data) mutable {
-            if (data.empty()) {
+        _s.read() >> [=, fn = std::forward<Fn>(fn)](const ReadData &data) mutable {
+            if (data.is_timeouted()) {
+                fn(Message{WSFrameType::timeout});
+            } else if (data.empty()) {
                 fn(Message{WSFrameType::incomplete});
             } else {
                 _s.put_back(_parser.parse(data));
@@ -469,22 +470,21 @@ inline void WSStream_Impl::recv_async_loop2(Fn &&fn, bool ping_sent) {
                 case WSFrameType::connClose:
                         fn(msg);
                         return;
-                case WSFrameType::incomplete:
-                    if (timeouted()) {
-                        if (ping_sent) {
-                            unsigned int need = 0;
-                            _close_code.compare_exchange_strong(need, closeConnTimeout, std::memory_order_relaxed);
-                            fn(get_close_message());
-                        } else {
-                            clear_timeout();
-                            send_ping();
-                            recv_async_loop2(std::forward<Fn>(fn), true);
-                        }
-                    } else {
+                case WSFrameType::timeout:
+                    if (ping_sent) {
                         unsigned int need = 0;
-                        _close_code.compare_exchange_strong(need, closeConnReset, std::memory_order_relaxed);
+                        _close_code.compare_exchange_strong(need, closeConnTimeout, std::memory_order_relaxed);
                         fn(get_close_message());
-                    }
+                    } else {
+                        clear_timeout();
+                        send_ping();
+                        recv_async_loop2(std::forward<Fn>(fn), true);
+                    }                    
+                    return;
+                case WSFrameType::incomplete:
+                    unsigned int need = 0;
+                    _close_code.compare_exchange_strong(need, closeConnReset, std::memory_order_relaxed);
+                    fn(get_close_message());
                     return;
                 case WSFrameType::ping:
                 case WSFrameType::pong:
@@ -550,10 +550,6 @@ void WSStream_Impl::flush_async(Fn &&cb) {
     _flush_list.push_back(std::forward<Fn>(cb));
 }
 
-
-inline bool WSStream_Impl::timeouted() const {
-    return _close_code.load() == 0 && _s.timeouted();
-}
 
 
 inline void WSStream_Impl::clear_timeout() {

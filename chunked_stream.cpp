@@ -52,14 +52,14 @@ std::size_t ChunkedStream::parseChunkLine(const std::string &ln) {
     return sz;
 }
 
-void ChunkedStream::read_async(Callback<void(std::string_view)> &&callback) {
+void ChunkedStream::read_async(Callback<void(const ReadData &)> &&callback) {
     if (!putback_buff.empty()) {
         callback(ChunkedStream::read_sync_nb());
         return;
     }
 
     if (chunk_size) {
-        _ref->read_async([=, cb = std::move(callback)](std::string_view data) mutable {
+        _ref->read_async([=, cb = std::move(callback)](const ReadData &data) mutable {
            if (data.empty()) {
                cb(data);
            } else {
@@ -151,7 +151,7 @@ std::string_view ChunkedStream::read_sync_nb() {
 
 }
 
-std::string_view ChunkedStream::read_sync() {
+ReadData ChunkedStream::read_sync() {
     if (!putback_buff.empty()) return ChunkedStream::read_sync_nb();
 
     if (chunk_size) {
@@ -166,7 +166,7 @@ std::string_view ChunkedStream::read_sync() {
             return s;
         }
     } else if (read_closed) {
-        return std::string_view();
+        return ReadData();
     } else {
         std::string buffer;
         while(true) {
@@ -202,9 +202,6 @@ void ChunkedStream::close_input() {
     read_closed = true;
 }
 
-bool ChunkedStream::timeouted() {
-    return _ref->timeouted();
-}
 
 void ChunkedStream::close_output() {
     if (!write_closed) {
