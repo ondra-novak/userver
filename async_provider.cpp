@@ -19,6 +19,9 @@
 
 namespace userver {
 
+std::size_t AsyncProvider::max_recursion_count = 100;
+thread_local std::size_t AsyncProvider::_recursion_count = 0;
+
 
 enum class ThreadFlag {
     //outside thread

@@ -420,9 +420,22 @@ public:
      * is valid until the callback is finished. The reference is not const, so you can freely move
      * the string out of the callback instance to somewhere else
      */
-    void get_line_async(std::string_view separator, Callback<void(bool,std::string &)> &&cb) {
-        read_async([=, cb = std::move(cb)](std::string_view data) mutable {
-            get_line_async_cont(data, std::string(separator), std::string(), std::move(cb));
+    void get_line_async(std::string_view separator, Callback<void(bool,const ReadData &)> &&cb) {        
+        read_async([=, cb = std::move(cb)](const ReadData &data) mutable {
+            if (data.empty()) {
+                cb(false, data);
+                return;
+            }
+            auto p = data.find(separator);
+            
+            if (p == data.npos) {
+                get_line_async_cont(data, std::string(separator), std::string(), std::move(cb));
+                return;
+            }
+            
+            auto part = data.substr(0, p);
+            put_back(data.substr(p+separator.length()));
+            cb(true, part);
         });
     }
 
@@ -614,16 +627,19 @@ protected:
         }
     }
 
-    void get_line_async_cont(std::string_view data, std::string &&separator, std::string &&buffer, Callback<void(bool, std::string &)> &&cb) {
+    //temporary line buffer for get_line_async
+    std::vector<char> _linebuff;
+    
+    void get_line_async_cont(std::string_view data, std::string &&separator, std::string &&buffer, Callback<void(bool, const ReadData &)> &&cb) {
         if (data.empty()) {
-            cb(false, buffer);
+            cb(false, ReadData(buffer));
         } else {
             buffer.append(data);
             auto n = find_separator(buffer, separator, buffer.size() - data.size());
             if (n != buffer.npos) {
                 put_back(data.substr(data.size() - (buffer.size() - n - separator.size())));
                 buffer.resize(n);
-                cb(true,buffer);
+                cb(true,ReadData(buffer));
                 return;
             }
             read_async([this,separator = std::move(separator), buffer = std::move(buffer), cb = std::move(cb)](std::string_view data) mutable {

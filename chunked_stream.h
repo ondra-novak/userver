@@ -56,10 +56,12 @@ protected:
     bool read_closed = false;
     std::size_t chunk_size = 0;
     std::string_view putback_buff;
+    std::vector<char> _chunk_out;
+    
 
 
-    static std::size_t parseChunkLine(const std::string &ln);
-    static std::vector<char> createChunk(const std::string_view &data);
+    static std::size_t parseChunkLine(const std::string_view &ln);
+    void createChunk(const std::string_view &data);
 };
 
 }

@@ -215,7 +215,40 @@ public:
 	void stop() {
 		return get()->stop();
 	}
+	
+	///Execute a function with arguments synchronously - when function is excepted to be called asynchronously
+	/**
+	 * This handles callback recursion. Measures recursion depth and if the recursion
+	 * count is reached certain level, the execution is performed asynchronously 
+	 * @param cb callback function
+	 * @param args arguments
+	 */
+	template<typename Fn, typename ... Args> 
+	void runAsyncAsSync(Fn &&cb, Args &&... args);
+	
+	static std::size_t max_recursion_count;
+protected:
+	static thread_local std::size_t _recursion_count ;
 };
+
+
+template<typename Fn, typename ... Args> 
+void AsyncProvider::runAsyncAsSync(Fn &&cb, Args &&... args) {
+    if (++_recursion_count > max_recursion_count) {
+        runAsync([cb = std::forward<Fn>(cb), args = std::make_tuple(std::forward<Args>(args)...)]() mutable {
+            std::apply(std::forward<Fn>(cb), std::move(args));
+        });
+    } else {
+        try {
+            cb(std::forward<Args>(args)...);
+        } catch (...) {
+            --_recursion_count;
+            throw;
+        }
+    }
+    --_recursion_count;
+}
+
 
 
 class NoDispatcherForTheResourceException: public std::exception {

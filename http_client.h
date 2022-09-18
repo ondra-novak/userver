@@ -214,8 +214,6 @@ public:
 	///Returns host of current opened request
 	const std::string &getHost() const {return host;}
 
-	///Retrieves stream which carries whole response, which is released when stream is destroyed
-	static Stream getResponseBody(std::unique_ptr<HttpClientRequest> &&req);
 
 protected:
 	///Sends request asynchronously

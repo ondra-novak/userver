@@ -9,7 +9,8 @@
 #define SRC_LIBS_USERVER_STREAM_INSTANCE_H_
 
 #include <shared/trailer.h>
-#include <userver/stream.h>
+#include "stream.h"
+#include "async_provider.h"
 
 #include <future>
 
@@ -94,7 +95,7 @@ protected:  //read part
 
     virtual void read_async(Callback<void(const ReadData &)> &&callback) override {
         if (!_put_back.empty()) {
-            callback(StreamInstance::read_sync_nb());
+            getCurrentAsyncProvider().runAsyncAsSync(std::move(callback),StreamInstance::read_sync_nb());
             return;
         }
         if (_read_buffer_need_expand) {

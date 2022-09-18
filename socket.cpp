@@ -193,14 +193,7 @@ void Socket::read(void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
 			}
 		}
 	} else {
-	    RecursiveCounter cntr;
-	    if (cntr.can_recursive()) {
-	        fn(r);
-	    } else {
-            getCurrentAsyncProvider().runAsync([r, fn = std::move(fn)]() mutable {
-               fn(r);
-            });
-	    }
+	    getCurrentAsyncProvider().runAsyncAsSync(std::move(fn), r);
 	}
 }
 void Socket::write(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
@@ -232,15 +225,9 @@ void Socket::write(const void *buffer, std::size_t size, CallbackT<void(int)> &&
 			}
 		}
 	} else {
-        RecursiveCounter cntr;
-        if (cntr.can_recursive()) {
-            fn(r);
-        } else {
-            getCurrentAsyncProvider().runAsync([r, fn = std::move(fn)]() mutable {
-               fn(r);
-            });
-        }
+	    getCurrentAsyncProvider().runAsyncAsSync(std::move(fn), r);
 	}
+	
 }
 
 bool Socket::checkSocketState() const {

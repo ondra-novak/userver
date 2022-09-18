@@ -150,7 +150,7 @@ void HttpClientRequest::sendAsync(CallbackT<void(int)> &&cb) {
 					cb(status);
 				} else {
 					s.put_back(data);
-					s.get_line_async("\r\n\r\n", [this, cb = std::move(cb)](bool ok, std::string &line) mutable {
+					s.get_line_async("\r\n\r\n", [this, cb = std::move(cb)](bool ok, const ReadData &line) mutable {
 					    responseBuffer = std::move(line);
 					    if (ok && parseResponse()) {
 					        prepareUserStream();
@@ -506,10 +506,6 @@ HttpClient::HttpClient(HttpClientCfg &&cfg):cfg(std::move(cfg)) {
 }
 
 
-Stream HttpClientRequest::getResponseBody(std::unique_ptr<HttpClientRequest> &&req) {
-	Stream &s = req->getResponse();
-	return createStreamReference(s);
-}
 
 const HttpClientRequest::HeaderMap& HttpClientRequest::getHeaders() {
 	return responseHeaders;

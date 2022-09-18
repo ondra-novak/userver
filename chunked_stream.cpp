@@ -7,6 +7,7 @@
 
 #include "chunked_stream.h"
 
+#include "async_provider.h"
 #include <future>
 
 
@@ -45,10 +46,10 @@ void ChunkedStream::timeout_async_write() {
     _ref->timeout_async_write();
 }
 
-std::size_t ChunkedStream::parseChunkLine(const std::string &ln) {
+std::size_t ChunkedStream::parseChunkLine(const std::string_view &ln) {
     char *term = nullptr;
-    auto sz = std::strtoul(ln.c_str(), &term, 16);
-    if (*term != '\r') throw std::runtime_error("Invalid chunk");
+    auto sz = std::strtoul(ln.data(), &term, 16);
+    if (static_cast<std::size_t>(std::distance<const char *>(ln.data(), term)) < ln.length()) throw std::runtime_error("Invalid chunk");
     return sz;
 }
 
@@ -73,7 +74,7 @@ void ChunkedStream::read_async(Callback<void(const ReadData &)> &&callback) {
     } else if (read_closed) {
         callback(std::string_view());
     } else {
-        _ref.get_line_async("\r\n", [=, cb = std::move(callback)](bool ok, std::string &ln) mutable {
+        _ref.get_line_async("\r\n", [=, cb = std::move(callback)](bool ok, const ReadData &ln) mutable {
             if (ok) {
                 if (ln.empty()) read_async(std::move(cb));
                 else {
@@ -95,7 +96,7 @@ void ChunkedStream::read_async(Callback<void(const ReadData &)> &&callback) {
                 cb(std::string_view());
             }
         });
-    }
+    }    
 }
 
 template<typename Fn>
@@ -108,8 +109,9 @@ static void toHex(std::size_t v, int z, Fn &&fn) {
 }
 
 
-std::vector<char> ChunkedStream::createChunk(const std::string_view &data) {
-    std::vector<char> buff;
+void ChunkedStream::createChunk(const std::string_view &data) {
+    auto &buff = _chunk_out;
+    buff.clear();
     buff.reserve(data.size()+20);
     std::size_t sz = data.size();
     toHex(sz,1,[&](char c){buff.push_back(c);});
@@ -117,8 +119,7 @@ std::vector<char> ChunkedStream::createChunk(const std::string_view &data) {
     buff.push_back('\n');
     std::copy(data.begin(), data.end(), std::back_inserter(buff));
     buff.push_back('\r');
-    buff.push_back('\n');
-    return buff;
+    buff.push_back('\n');    
 
 }
 
@@ -126,17 +127,18 @@ bool ChunkedStream::write_async(const std::string_view &buffer, Callback<void(bo
     if (write_closed) {
         callback(false);
         return false;
-    }else if (buffer.empty()) {
-        callback(true);
-        return true;
-    } else {
-        auto chunk = createChunk(buffer);
-        //pack data to chunk, do not copy content, we move chunk into callback
-        return _ref->write_async(std::string_view(chunk.data(), chunk.size()),
-             [chunk = std::move(chunk), cb = std::move(callback)](bool ok) mutable {
-                cb(ok);
-        });
     }
+    bool res;
+    if (buffer.empty()) {
+        callback(true);
+        res = true;
+    } else {
+        createChunk(buffer);
+        std::string_view chunk_str(_chunk_out.data(), _chunk_out.size());
+        //pack data to chunk, do not copy content, we move chunk into callback
+        res = _ref->write_async(chunk_str, std::move(callback));
+    }
+    return res;
 }
 
 int ChunkedStream::get_read_timeout() const {
@@ -226,8 +228,8 @@ bool ChunkedStream::write_sync(const std::string_view &buffer) {
     if (write_closed) return false;
     else if (buffer.empty()) return true;
     else {
-        auto chunk = createChunk(buffer);
-        return _ref.write_sync(std::string_view(chunk.data(), chunk.size()));
+        createChunk(buffer);
+        return _ref.write_sync(std::string_view(_chunk_out.data(), _chunk_out.size()));
     }
 }
 
