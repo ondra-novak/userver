@@ -595,18 +595,20 @@ void HttpServerRequest::sendErrorPage(int code) {
 static void std_error_page(HttpServerRequest &req, int code, const std::string_view &description) {
 	std::ostringstream body;
 	auto msg = getStatusCodeMsg(code);
-	body << "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-			"<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">"
-			"<html xmlns=\"http://www.w3.org/1999/xhtml\">"
-			"<head>"
-			"<title>" << code << " " << msg<<"</title>"
-			"</head>"
-			"<body>"
-			"<h1>"  << code << " " << msg <<"</h1>"
-			"<p><![CDATA[" << description << "]]></p>"
-			"</body>"
-			"</html>";
-	req.setContentType("application/xhtml+xml");
+	if (code != 204 && code != 304) {
+        body << "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+                "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">"
+                "<html xmlns=\"http://www.w3.org/1999/xhtml\">"
+                "<head>"
+                "<title>" << code << " " << msg<<"</title>"
+                "</head>"
+                "<body>"
+                "<h1>"  << code << " " << msg <<"</h1>"
+                "<p><![CDATA[" << description << "]]></p>"
+                "</body>"
+                "</html>";
+        req.setContentType("application/xhtml+xml");
+	}
 	req.setStatus(code);
 	req.send(body.str());
 

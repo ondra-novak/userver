@@ -105,6 +105,8 @@ int Socket::write(const void *buffer, std::size_t size) {
 			}
 			r = send(s, buffer,size, 0);
 			if (r < 0) error(errno,"socket write()");
+		} else if (err == EPIPE) {
+		    return 0;		
 		} else {
 			error(err,"socket write()");
 		}
