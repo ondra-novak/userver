@@ -528,6 +528,7 @@ public:
         friend class Stream_t;
 
     };
+    
 
     ///Generic read, you can choose between sync and async version by use
     /**
@@ -616,6 +617,39 @@ public:
     std::size_t get_buffered_amount() const {
         auto ptr = dynamic_cast<const IBufferedStreamInfo *>(PtrType::get());
         if (ptr) return ptr->get_buffered_amount(); else return 0;
+    }
+
+    ///Async read in a loop
+    /**
+     * function is called in cycle
+     * 
+     * @param stream stream
+     * @param fn callback function which receives Stream_t & and ReadData as arguments. Function
+     * must return true to continue or false to 
+     */
+    static void read_loop(Stream_t &&stream, Callback<bool(Stream_t &, const ReadData &data)> &&fn) {
+        stream.read() >> [fn = std::move(fn), stream = std::move(stream)](const ReadData &data) mutable {
+            if (fn(stream, data)) read_loop(std::move(stream), std::move(fn));
+        };
+    }
+
+    ///Async write in a loop
+    /**
+     * Performs async write operation in a loop by repeatedly calling the callback function
+     * @param stream stream
+     * @param fn callback function which is called for every write. The callback function
+     * receives Stream & and bool which is set to true, if previous write has been successful.
+     * The function must return std::string_view containing informations to write. Note that
+     * this string_view must remain valid until the next callback is called
+     * @param ok bool argument passed to the first call, in mostly cases it is true.
+     */    
+    static void write_loop(Stream_t &&stream, Callback<std::string_view(Stream_t &, bool)> &&fn, bool ok = true) {
+        std::string_view buffer = fn(stream, ok);
+        if (!buffer.empty()) {
+            stream.write(buffer) >> [fn = std::move(fn), stream = std::move(stream)](bool ok) mutable {
+                write_loop(std::move(stream), std::move(fn), ok);
+            };
+        }
     }
 
 protected:
