@@ -88,6 +88,19 @@ public:
 	 * @note if length of the body was not set, then chunked transfer is used
 	 */
 	Stream &beginBody();
+	
+	
+	template<typename CB>
+	void beginBodyAsync(CB &&cb) {
+	    if (!header_sent) {
+	        finish_headers(true);
+	        s.write_async(buff, [this, cb = std::forward<CB>(cb)](bool) mutable {           
+	            cb(beginBody());
+	        });
+	    } else {
+	        cb(beginBody());
+	    }
+	}
 
 	class SendHelper {
 	public:
@@ -405,8 +418,10 @@ inline int HttpClientRequest::send(Fn &&body) {
 
 template<typename Fn, typename>
 inline void HttpClientRequest::sendAsync(Fn &&body, CallbackT<void(int)> &&cb) {
-	beginBody();
-	sendAsyncCont(std::forward<Fn>(body),std::move(cb));
+	beginBodyAsync([this, cb = std::move(cb), body = std::forward<Fn>(body)](Stream &s) mutable {
+	    sendAsyncCont(std::forward<Fn>(body),std::move(cb));
+	});
+
 }
 
 template<typename Fn>

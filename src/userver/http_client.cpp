@@ -81,6 +81,7 @@ void HttpClientRequest::setContentType(const std::string_view &ctx) {
 Stream& HttpClientRequest::beginBody() {
 	if (!header_sent) {
 		finish_headers(true);
+		s.write_sync(buff);
 	}
 	if (has_te) {
 		if (has_te_chunked) {
