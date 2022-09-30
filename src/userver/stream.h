@@ -540,7 +540,7 @@ public:
 
     protected:
         typename PtrType::element_type * _owner;
-        std::vector<char> &_buffer;
+        std::vector<char> _buffer;
         std::size_t _size;
         ReadBlockHelper(const Stream_t &owner, std::vector<char> &buffer, std::size_t size)
             :_owner(owner.get()),_buffer(std::move(buffer)),_size(size) {}

@@ -122,7 +122,7 @@ protected:  //read part
         _target.closeInput();
     }
 
-    virtual void timeout_async_read() {
+    virtual void timeout_async_read() override {
         _target.setRdTimeout(0);
         _target.cancelAsyncRead(true);
     }
@@ -184,7 +184,7 @@ protected:  //write part
     }
 
 
-    virtual void close_output() {
+    virtual void close_output() override {
         if (_write_error.load(std::memory_order_relaxed)) return;
 #ifndef NDEBUG
             assert(_writing.fetch_add(1, std::memory_order_relaxed) == 0); //multiple pending reading
@@ -195,22 +195,21 @@ protected:  //write part
 #endif
     }
 
-    virtual void timeout_async_write() {
+    virtual void timeout_async_write() override {
         _target.setWrTimeout(0);
         _target.cancelAsyncWrite(true);
     }
 
 
 
-protected:  //misc part
-    virtual bool timeouted() {return _target.timeouted();}
-    virtual void clear_timeout() {_target.clearTimeout();}
+protected:  //misc part    
+    virtual void clear_timeout() override {_target.clearTimeout();}
     virtual void set_read_timeout(int tm_in_ms) override {_target.setRdTimeout(tm_in_ms);}
     virtual void set_write_timeout(int tm_in_ms) override {_target.setWrTimeout(tm_in_ms);}
     virtual void set_rw_timeout(int tm_in_ms) override {_target.setIOTimeout(tm_in_ms);}
     virtual int get_read_timeout() const override {return _target.getRdTimeout();}
     virtual int get_write_timeout() const override {return _target.getWrTimeout();}
-    virtual std::unique_ptr<AbstractStreamInstance> create_buffered();
+    virtual std::unique_ptr<AbstractStreamInstance> create_buffered() override;
 
 
     void cleanup_pending();

@@ -18,19 +18,7 @@
 #include "limited_stream.h"
 #include "chunked_stream.h"
 
-#ifdef __GNUC__
-#if __GNUC__ < 8
-#include <experimental/filesystem>
-namespace std {
-	using namespace experimental;
-}
-#else
-#include <filesystem>
-#endif
-#else
-#include <filesystem>
-#endif
-
+#include <shared/filesystem.h>
 
 namespace userver {
 
@@ -478,12 +466,6 @@ static char *numToStr(char *buff, std::size_t x) {
 	}
 }
 
-static void putCode(std::ostream &stream, std::size_t x) {
-	if (x) {
-		putCode(stream, x/10);
-		stream.put('0' + (x%10));
-	}
-}
 
 void HttpServerRequest::set(const std::string_view &key, std::size_t number) {
 	if (number == 0) {
@@ -1290,7 +1272,7 @@ std::string HttpServerRequest::getURL() const {
 	auto host = getHost();
 	auto path = getPath();
 	bool sec = isSecure();
-	ret.reserve(host.length()+path.length()+sec?7:8);
+	ret.reserve(host.length()+path.length()+(sec?7:8));
 	if (sec) ret.append("https://"); else ret.append("http://");
 	ret.append(host);
 	ret.append(path);

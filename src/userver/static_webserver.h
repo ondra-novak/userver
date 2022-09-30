@@ -10,19 +10,7 @@
 
 
 #include "http_server.h"
-
-#ifdef __GNUC__
-#if __GNUC__ < 8
-#include <experimental/filesystem>
-namespace std {
-	using namespace experimental;
-}
-#else
-#include <filesystem>
-#endif
-#else
-#include <filesystem>
-#endif
+#include <shared/filesystem.h>
 
 
 namespace userver {
