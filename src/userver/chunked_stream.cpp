@@ -60,7 +60,7 @@ void ChunkedStream::read_async(Callback<void(const ReadData &)> &&callback) {
     }
 
     if (chunk_size) {
-        _ref->read_async([=, cb = std::move(callback)](const ReadData &data) mutable {
+        _ref->read_async([=, this, cb = std::move(callback)](const ReadData &data) mutable {
            if (data.empty()) {
                cb(data);
            } else {
@@ -74,7 +74,7 @@ void ChunkedStream::read_async(Callback<void(const ReadData &)> &&callback) {
     } else if (read_closed) {
         callback(std::string_view());
     } else {
-        _ref.get_line_async("\r\n", [=, cb = std::move(callback)](bool ok, const ReadData &ln) mutable {
+        _ref.get_line_async("\r\n", [=, this, cb = std::move(callback)](bool ok, const ReadData &ln) mutable {
             if (ok) {
                 if (ln.empty()) read_async(std::move(cb));
                 else {

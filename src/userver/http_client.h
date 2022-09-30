@@ -18,6 +18,7 @@
 #include "stream.h"
 #include "header_value.h"
 #include <sstream>
+#include "coclasses.h"
 
 
 namespace userver {
@@ -354,7 +355,9 @@ public:
 	void DELETE(const URL &url, HeaderList headers, const Data &data, Callback &&cb);
 	void DELETE(const URL &url, HeaderList headers, Callback &&cb);
 
-
+#ifdef SRC_LIBS_USERVER_COCLASSES_H_
+	cocls::task<std::unique_ptr<HttpClientRequest> > async_GET(const URL &url, HeaderList headers);
+#endif
 
 protected:
 	///Open new request

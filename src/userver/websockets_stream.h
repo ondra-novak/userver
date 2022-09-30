@@ -430,7 +430,7 @@ inline void WSStream_Impl::recv_async(Fn &&fn) {
     if (_close_code.load(std::memory_order_relaxed)) {
         fn(get_close_message());
     } else {
-        _s.read() >> [=, fn = std::forward<Fn>(fn)](const ReadData &data) mutable {
+        _s.read() >> [=, this, fn = std::forward<Fn>(fn)](const ReadData &data) mutable {
             if (data.is_timeouted()) {
                 fn(Message{WSFrameType::timeout});
             } else if (data.empty()) {
@@ -458,7 +458,7 @@ inline void WSStream_Impl::recv_async_loop(Fn &&fn) {
 template<typename Fn>
 inline void WSStream_Impl::recv_async_loop2(Fn &&fn, bool ping_sent) {
     auto stream = _s.get();
-    recv_async([=, fn = std::forward<Fn>(fn)](Message &&msg) mutable {
+    recv_async([=, this, fn = std::forward<Fn>(fn)](Message &&msg) mutable {
         do {
             //examine message
             switch (msg.type) {

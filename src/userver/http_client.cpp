@@ -533,6 +533,15 @@ void HttpClient::DELETE(const URL &url, HeaderList headers, Callback &&cb) {
 	sendRequest("DELETE", url, headers, std::move(cb));
 }
 
+#ifdef SRC_LIBS_USERVER_COCLASSES_H_
+cocls::task<std::unique_ptr<HttpClientRequest> > HttpClient::async_GET(const URL &url, HeaderList headers) {
+    cocls::callback_promise<std::unique_ptr<HttpClientRequest> > cbp;
+    GET(url, headers, cbp.get_callback());
+    co_return std::move(co_await cbp);
+}
+#endif
+
+
 
 class StringSource {
 public:

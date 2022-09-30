@@ -951,7 +951,7 @@ void HttpServer::start(NetAddrList listenSockets, AsyncProvider a) {
 
 	logger = new Logger(*this);
 
-	a.runAsync([=]{
+	a.runAsync([this]{
 		listen();
 	});
 

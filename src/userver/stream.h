@@ -11,6 +11,7 @@
 
 #include "platform_def.h"
 #include "isocket.h"
+#include "coclasses.h"
 
 #include <vector>
 #include <memory>
@@ -421,7 +422,7 @@ public:
      * the string out of the callback instance to somewhere else
      */
     void get_line_async(std::string_view separator, Callback<void(bool,const ReadData &)> &&cb) {        
-        read_async([=, cb = std::move(cb)](const ReadData &data) mutable {
+        read_async([=, this, cb = std::move(cb)](const ReadData &data) mutable {
             if (data.empty()) {
                 cb(false, data);
                 return;
@@ -445,7 +446,7 @@ public:
 
     class ReadHelper {
     public:
-        operator std::string_view() {
+        operator ReadData() {
             auto out = _owner->read_sync();
             _owner = nullptr;
             return out;
@@ -456,12 +457,22 @@ public:
             _owner = nullptr;
         }
 
+        
     protected:
         typename PtrType::element_type * _owner;
         ReadHelper(const Stream_t &owner):_owner(owner.get()) {}
         ReadHelper(const ReadHelper &other) = delete;
         ReadHelper &operator=(const ReadHelper &other) = delete;
         friend class Stream_t;
+#ifdef SRC_LIBS_USERVER_COCLASSES_H_
+    public:
+        auto operator co_await() {
+            _owner->read_async(_cbprom.get_callback());
+            return _cbprom.operator co_await();
+        }
+    protected:
+        cocls::callback_promise<ReadData> _cbprom;
+#endif
     };
 
     class WriteHelper {
@@ -488,6 +499,16 @@ public:
         WriteHelper(const WriteHelper &other) = delete;
         WriteHelper &operator=(const WriteHelper &other) = delete;
         friend class Stream_t;
+#ifdef SRC_LIBS_USERVER_COCLASSES_H_
+    public:
+        auto operator co_await() {
+            _owner->write_async(_buffer, _cbprom.get_callback());
+            _owner = nullptr;
+            return _cbprom.operator co_await();
+        }
+    protected:
+        cocls::callback_promise<bool> _cbprom;
+#endif
     };
 
 

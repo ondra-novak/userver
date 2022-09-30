@@ -380,7 +380,7 @@ protected:
             if (ok && !buffer.empty()) {
                 std::string_view ss(buffer.data(), buffer.size());
                 StreamInstance<T>::write_async(ss,
-                               [=, b = std::move(buffer), tmp = std::move(tmp)](bool ok) mutable{
+                               [=, this, b = std::move(buffer), tmp = std::move(tmp)](bool ok) mutable{
                     for (const auto &cb : tmp) {
                         cb(ok);
                     }
@@ -409,7 +409,7 @@ protected:
                 _pending_write = true;
                 std::string_view ss(_buffer.data(), _buffer.size());
                 StreamInstance<T>::write_async(ss,
-                        [=, b = std::move(_buffer), callback = std::move(callback)](bool ok) mutable{
+                        [=, this, b = std::move(_buffer), callback = std::move(callback)](bool ok) mutable{
                     if (callback != nullptr) callback(ok);
                     finish_write(ok, std::move(b));
                 });

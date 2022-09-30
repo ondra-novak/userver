@@ -20,7 +20,7 @@ namespace _undefined {
 class OpenAPIServer: public HttpServer {
 public:
 
-	using Handler = CallbackT<bool(PHttpServerRequest &, const RequestParams &)>;
+	using Handler = CallbackT<bool(PHttpServerRequest &, const RequestParams &)>;	
 
 
 	struct InfoObject {
