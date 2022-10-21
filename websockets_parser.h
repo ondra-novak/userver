@@ -37,7 +37,16 @@ public:
 };
 
 enum class WSFrameType {
+	///Unkown frame - this state is never returned, however it used to initialize variables
+	unknown = 0,
 	///frame is not complete yet
+	/** If incomplete received through recv(), it can mean, that remote stream
+	 * was closed or an error has been reported. You need to check stream
+	 * state, what happened.
+	 *
+	 * If the stream is timeouted, you can retry recv() to wait to rest of the
+	 * frame.
+	 */
 	incomplete,
 	///text frame
 	text,

@@ -1,6 +1,8 @@
 #include <atomic>
 
 #include "callback.h"
+#include <condition_variable>
+#include <mutex>
 
 namespace userver {
 
@@ -27,7 +29,7 @@ enum class CallType {
  *
  */
 template<typename ... Types>
-class Future {
+class Future: public AllocBase<Future<Types...> > {
 public:
 
 	///Definition of an type, which holds the value
@@ -109,40 +111,38 @@ public:
 	const Tuple &get() const;
 
 
-	///Creates promise
-	/**
-	 * Promise is represented as callback function, when the function is called, the future receives values
-	 * passed as arguments to the callback
-	 *
-	 * Function requires future as shared_ptr.
-	 *
-	 */
-	static CallbackT<void(Types...)> promise(std::shared_ptr<Future<Types...> > fut);
 
-	///Creates promise
-	/**
-	 * Promise is represented as callback function, when the function is called, the future receives values
-	 * passed as arguments to the callback
-	 *
-	 * Function requires future as unique_ptr. Note that once the promise is created, the instance is moved to
-	 * the closure of the callback function and becomes no longer accessable. Once the callback is executed, the
-	 * future instance is destroyed. You need to attach CALLBACKs before the promise is created
-	 *
-	 */
-	static CallbackT<void(Types...)> promise(std::unique_ptr<Future<Types...> > &&fut);
+	CallbackT<void(Types...)> promise() ;
 
 
 	///Creates shared future
 	/**
 	 * Shared future can be shared between threads. Last reference destroyes the future
 	 */
-	std::shared_ptr<Future<Types...> > make_shared() {return std::make_shared<Future<Types...> >();}
+	static std::shared_ptr<Future<Types...> > make_shared() {return std::make_shared<Future<Types...> >();}
 
 	///Creates unique future
 	/**
 	 * Unique future can be moved through contextes (because stack base Future cannot),
 	 */
-	std::unique_ptr<Future<Types...> > make_unique() {return std::make_unique<Future<Types...> >();}
+	static std::unique_ptr<Future<Types...> > make_unique() {return std::make_unique<Future<Types...> >();}
+
+	template<typename Fn>
+	friend void operator >> (std::unique_ptr<Future<Types...> > &f, Fn &&fn) {
+		Future<Types...> &x = *f;
+		x >> [f = std::move(f), fn = std::move(fn)](Types ... t) mutable {
+			(void)f; //mark referenced
+			fn(t...);
+		};
+	}
+	template<typename Fn>
+	friend void operator >> (const std::shared_ptr<Future<Types...> > &f, Fn &&fn) {
+		Future<Types...> &x = *f;
+		x >> [f, fn = std::move(fn)](Types ... t) mutable {
+			(void)f; //mark referenced
+			fn(t...);
+		};
+	}
 
 protected:
 
@@ -182,6 +182,8 @@ protected:
 	};
 
 
+
+
 	//union is not initialized until the value is resolved
 	//cleanup is handled by destructor
 	union {
@@ -190,20 +192,38 @@ protected:
 	std::atomic<bool> resolved;
 	mutable std::atomic<AbstractAction *> callbacks;
 
+	class Promise: public ICallbackT<void(Types ...)> {
+	public:
+
+		void *operator new(std::size_t);  //not defined, should not be used
+		void *operator new(std::size_t, void *p) {return p;}
+		void operator delete(void *x, void *p) {}
+		void operator delete(void *ptr, std::size_t) {} //empty, when unique PTR tries to call delete
+		Promise(Future &owner):owner(owner) {}
+		virtual void invoke(Types ... args) const {
+			owner.set(args ...);
+		}
+		Future &owner;
+	};
+
+	char promiseReserved[sizeof(Promise)];
+
 	void flushCallbacks(AbstractAction *me) const;
+
+	template<typename Fn>
+	class CB: public AbstractAction, public AllocBase<Future<Types...>::CB<Fn>> {
+	public:
+		CB(Fn &&fn):fn(std::forward<Fn>(fn)) {}
+		virtual void resolved(CallType ct, const Tuple &val) noexcept {
+			cbcall(std::forward<Fn>(fn), ct, val);
+		}
+		std::remove_reference_t<Fn> fn;
+	};
+
 
 };
 
 
-template<typename Fn, typename ... Types>
-void operator>>(std::shared_ptr<Future<Types...> > fut, Fn &&fn) {
-	fut->operator>>(std::forward<Fn>(fn));
-}
-
-template<typename Fn, typename ... Types>
-void operator>>(std::unique_ptr<Future<Types...> > &fut, Fn &&fn) {
-	fut->operator>>(std::forward<Fn>(fn));
-}
 
 template<typename ... Types>
 inline Future<Types...>::Future()
@@ -232,17 +252,7 @@ inline void Future<Types...>::operator >>(Fn &&fn) const {
 		cbcall(std::forward<Fn>(fn), CallType::sync, value);
 	} else {
 
-		class CB: public AbstractAction {
-		public:
-			CB(Fn &&fn):fn(std::forward<Fn>(fn)) {}
-			virtual void resolved(CallType ct, const Tuple &val) noexcept {
-				cbcall(std::forward<Fn>(fn), ct, val);
-			}
-
-			std::remove_reference_t<Fn> fn;
-		};
-
-		CB *x = new CB(std::forward<Fn>(fn));
+		CB<Fn> *x = new CB<Fn>(std::forward<Fn>(fn));
 		AbstractAction *nx = nullptr;
 		do {
 			x->next = nx;
@@ -272,14 +282,11 @@ inline bool Future<Types ...>::operator !() const {
 	return !resolved.load();
 }
 
-
 template<typename ... Types>
-inline CallbackT<void(Types...)> Future<Types...>::promise(std::shared_ptr<Future<Types...> > fut) {
-	return CallbackT<void(Types...)>([fut](const Types& ... x){
-		fut->set(x...);
-	});
+CallbackT<void(Types...)> Future<Types...>::promise() {
+	Promise *p = new(promiseReserved) Promise(*this);
+	return CallbackT<void(Types...)>(std::unique_ptr<ICallbackT<void(Types...)> >(p));
 }
-
 template<typename ... Types>
 const typename Future<Types...>::Tuple& Future<Types...>::get() const {
 	if (resolved.load()) return value;
@@ -296,12 +303,6 @@ const typename Future<Types...>::Tuple& Future<Types...>::get() const {
 	return value;
 }
 
-template<typename ... Types>
-CallbackT<void(Types...)> Future<Types...>::promise(std::unique_ptr<Future<Types...> > &&fut) {
-	return CallbackT<void(Types...)>([fut=std::move(fut)](const Types& ... x){
-		fut->set(x...);
-	});
-}
 
 
 template<typename ... Types>

@@ -19,6 +19,7 @@
 #include "socket_server.h"
 #include "stream.h"
 #include "header_value.h"
+#include "shared/refcnt.h"
 
 namespace userver {
 
@@ -39,15 +40,22 @@ enum class LogLevel {
 	error,
 };
 
+class HttpServerRequest;
+
+class AbstractLogger: public ondra_shared::RefCntObj {
+public:
+    virtual void log(ReqEvent event,const HttpServerRequest &req) noexcept = 0;
+    virtual void handler_log(const HttpServerRequest &req, LogLevel lev, const std::string_view &msg) noexcept = 0;
+    virtual void error_page(HttpServerRequest &req, int status, const std::string_view &desc) noexcept= 0;
+    virtual ~AbstractLogger() {}
+};
+
+using PLogger = ondra_shared::RefCntPtr<AbstractLogger>;
+
+
 class HttpServerRequest {
 public:
 
-	class ILogger {
-	public:
-		virtual void log(ReqEvent event,const HttpServerRequest &req) noexcept = 0;
-		virtual void handler_log(const HttpServerRequest &req, LogLevel lev, const std::string_view &msg) noexcept = 0;
-		virtual ~ILogger() {}
-	};
 
 	using KeepAliveCallback = CallbackT<void(Stream &, HttpServerRequest &)>;
 
@@ -67,7 +75,8 @@ public:
 	void reuse_buffers(HttpServerRequest &from);
 
 	void setKeepAliveCallback(KeepAliveCallback &&kc);
-	void setLogger(ILogger *log) {logger = log;}
+	void setLogger(PLogger log) {logger = log;}
+	void setRootOffset(std::size_t offset) {root_offset = offset;}
 
 	template<typename ... Args>
 	void log(LogLevel lev, const Args & ... data);
@@ -90,6 +99,8 @@ public:
 	std::string_view getMethod() const;
 	///Retrieves whole path - including query string.
 	std::string_view getPath()  const;
+	///Retrieves whole root path (path to host root - can be different depend on host and prefix)
+	std::string_view getRootPath()  const;
 	///Retrieves http version (HTTP/1.0 or HTTP/1.1)
 	std::string_view getHTTPVer()  const;
 	///Retrieves host header
@@ -272,6 +283,7 @@ public:
 	static std::string_view contentTypeFromExtension(std::string_view extension);
 
 	void setContentTypeFromExt(std::string_view ext);
+	bool isResponseSent() const {return response_sent;}
 
 protected:
 
@@ -282,12 +294,13 @@ protected:
 
 	Stream stream;
 	KeepAliveCallback klcb;
-	ILogger *logger = nullptr;
+	PLogger logger;
 	bool enableKeepAlive = false;
 	bool valid = false;
 	bool hasBody = true;
 	bool hasExpect = false;
 	std::size_t ident = 0;
+	std::size_t root_offset = 0;
 	std::chrono::system_clock::time_point initTime;
 
 	static std::atomic<std::size_t> identCounter;
@@ -412,14 +425,30 @@ public:
 
 	///Start the server
 	/**
+	 *
+	 *
 	 * @param listenSockets list of addresses to listen
-	 * @param threads count of threads processing the requests. When 0 is passed, then no threads are created,
-	 * but you can add threads manually by addThread()
-	 * @param dispatchers count of dispatchers, which monitors pending connections. Must be less or equal to threads
+	 * @param cfg configuration of root asynchronous provider. This function creates asynchronous provider
+	 * associated with the server. You should register this asynchronous provider with current thread
+	 *  or all other threads created before the call to allow to use asynchronous function
+	 *
+	 * @see getAsyncProvider
+	 *
+	 * @note configuration should have 'thread' also filled otherwise no threads are created
+	 *
+	 *
 	 */
-	void start(NetAddrList listenSockets, unsigned int threads, unsigned int dispatchers = 1);
+	void start(NetAddrList listenSockets, const AsyncProviderConfig &cfg);
 
-	void start(NetAddrList listenSockets, unsigned int threads, AsyncProvider asyncProvider);
+	///Start the server using existing async provider
+	/**
+	 * @param listenSockets list of addresses to listen
+	 * @param asyncProvider existing asynchronous provider. The instance should contain no running
+	 * threads as the server can create own threads which can also handle exceptions and pass
+	 * them to the logger. If you want to use own threads, set the field 'threads' to zero
+	 *
+	 */
+	void start(NetAddrList listenSockets, AsyncProvider asyncProvider);
 ///Stop the server
 	/**
 	 * Function joins all threads, will block until the operation completes
@@ -427,6 +456,8 @@ public:
 	 * operations are canceled. If there are associated data, they should be stored in
 	 * callbacks' clousures, because they are deleted as expected, so these data can be disposed in
 	 * this time.
+	 *
+	 * @note Function sets associated asynchronous provider to stop state
 	 */
 	void stop();
 
@@ -443,11 +474,14 @@ public:
 	 */
 	void stopOnSignal();
 
-	///Add thread to pool
-	/** Thread which called this function becomes the pool thread. Note that thread is not joined
-	 * during stop
+	///Executes current thread as worker
+	/**
+	 * Mostly called by main thread to use its power as worker. It also handles all exceptions,
+	 * which causes calling of unhandled() function.
+	 *
+	 * Function exits, when asynchronous provider is stopped
 	 */
-	void addThread();
+	void runAsWorker();
 
 	///Receive asynchronous provider
 	AsyncProvider getAsyncProvider();
@@ -464,7 +498,7 @@ public:
 	 * when you really needit, because this destroys purpose of paralelisation. It is better to use
 	 * per-thread buffers and occasionaly flush them with synchronization
 	 */
-	virtual void log(ReqEvent event, const HttpServerRequest &req);
+	virtual void log(ReqEvent event, const HttpServerRequest &req) noexcept;
 
 	///Overridable
 	/**
@@ -473,7 +507,7 @@ public:
 	 *
 	 * @param msg message logged.
 	 */
-	virtual void log(const HttpServerRequest &req, const std::string_view &msg);
+	virtual void log(const HttpServerRequest &req, const std::string_view &msg) noexcept;
 	///Overridable
 	/**
 	 * Receives log message generated by handler. Useful to collect logs from handlers, which are
@@ -481,8 +515,19 @@ public:
 	 *
 	 * @param msg message logged.
 	 */
-	virtual void log(const HttpServerRequest &req, LogLevel lev, const std::string_view &msg);
+	virtual void log(const HttpServerRequest &req, LogLevel lev, const std::string_view &msg) noexcept;
 
+	///Overridable
+	/**
+	 * Allows to format of error page.
+	 *
+	 * @note This call can't be asynchronous. You need to create and send error page synchronously. It is recommended to make error pages the smallest as possible
+	 *
+	 * @param req http request
+	 * @param status status code
+	 * @param desc error description
+	 */
+	virtual void error_page(HttpServerRequest &req, int status, const std::string_view &desc) noexcept;
 
 	///Overridable
 	/**
@@ -492,7 +537,7 @@ public:
 	 *
 	 * @note Default implementations sends what() message to the std.error.
 	 */
-	virtual void unhandled();
+	virtual void unhandled() noexcept;
 	///Allows to catch special connections before they are processed as HTTP request
 	/**
 	 * @param s stream containing new connection
@@ -526,11 +571,27 @@ public:
 
 	void setIOTimeout(unsigned int tm) {iotimeout = tm;}
 
+
+
 protected:
+
+	class Logger: public AbstractLogger {
+	public:
+	    Logger(HttpServer &owner):owner(owner) {}
+	    virtual ~Logger() {}
+	    virtual void handler_log(const HttpServerRequest &req, LogLevel level, const std::string_view &msg) noexcept;
+	    virtual void log(ReqEvent event, const HttpServerRequest &req) noexcept;
+	    virtual void error_page(HttpServerRequest &req, int status, const std::string_view &desc) noexcept;
+	    void close();
+	    HttpServer &owner;
+	    std::shared_timed_mutex mx;
+	    bool closed = false;
+	};
+
 	std::vector<std::thread> threads;
 	AsyncProvider asyncProvider;
 	std::optional<SocketServer> socketServer;
-	std::unique_ptr<HttpServerRequest::ILogger> logger;
+	ondra_shared::RefCntPtr<Logger> logger;
 	std::mutex lock;
 	unsigned int iotimeout = 5000;
 
@@ -606,6 +667,7 @@ void HttpServerRequest::readBodyAsync2(Stream &s, std::vector<char> &buffer, std
 	};
 }
 
+std::string_view getStatusCodeMsg(int code);
 
 
 }

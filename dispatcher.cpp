@@ -7,13 +7,13 @@
 
 #include "platform.h"
 #include "dispatcher.h"
-
+#include "socketresource.h"
 #include <fcntl.h>
 
 namespace userver {
 
 Dispatcher::Dispatcher()
-:stopped(false)
+:stopped(false),intr(false)
 {
 #ifdef _WIN32
 	intr_r = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -46,7 +46,7 @@ Dispatcher::Dispatcher()
 	intr_w = fds[1];
 	waiting.push_back({intr_r,POLLIN,0});
 	next_timeout = std::chrono::system_clock::time_point::max();
-	regs.push_back(Reg(nullptr, next_timeout));
+	regs.push_back(Reg(Callback(), next_timeout));
 #endif
 }
 
@@ -59,6 +59,20 @@ Dispatcher::~Dispatcher() {
 #endif
 }
 
+bool Dispatcher::waitAsync(IAsyncResource &&resource,  Callback &&cb, std::chrono::system_clock::time_point timeout) {
+    if (typeid(resource) == typeid(SocketResource)) {
+       const SocketResource &res = static_cast<const SocketResource &>(resource);
+       switch (res.op) {
+           default:
+           case SocketResource::read: waitRead(res.socket, std::move(cb), timeout);break;
+           case SocketResource::write: waitWrite(res.socket, std::move(cb), timeout);break;
+       }
+       return true;
+    } else {
+       return false;
+    }
+
+}
 
 void Dispatcher::waitRead(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) {
 	waitEvent(POLLIN, socket, std::move(cb), timeout);
@@ -68,8 +82,10 @@ void Dispatcher::waitWrite(SocketHandle socket, Callback &&cb, std::chrono::syst
 	waitEvent(POLLOUT, socket, std::move(cb), timeout);
 }
 
-void Dispatcher::execAsync(Callback &&cb) {
-	waitEvent(0, intr_r, std::move(cb), std::chrono::system_clock::time_point::min());
+void Dispatcher::interrupt() {
+    if (!intr.exchange(true))  {
+        notify();
+    }
 }
 
 void Dispatcher::notify() {
@@ -122,8 +138,8 @@ void Dispatcher::removeItem(std::size_t idx) {
 }
 
 Dispatcher::Task Dispatcher::getTask() {
-	if (stopped) return Task();
-	while (true) {
+    if (stopped) return Task();
+	while (!intr.exchange(false)) {
 		auto now = std::chrono::system_clock::now();
 		if (lastIdx >= waiting.size()) {
 			int wait_tm;
@@ -200,6 +216,7 @@ Dispatcher::Task Dispatcher::getTask() {
 			}
 		}
 	}
+	return Task();
 }
 
 Dispatcher::Reg::Reg(Callback &&cb, std::chrono::system_clock::time_point timeout)
@@ -208,4 +225,61 @@ Dispatcher::Reg::Reg(Callback &&cb, std::chrono::system_clock::time_point timeou
 
 }
 
+Dispatcher::Callback Dispatcher::stopWait(IAsyncResource &&resource) {
+    std::unique_lock _(lk);
+
+    if (typeid(resource) == typeid(SocketResource)) {
+       const SocketResource &res = static_cast<const SocketResource &>(resource);
+       switch (res.op) {
+           case SocketResource::read: return disarmEvent(POLLIN, res.socket);break;
+           case SocketResource::write: return disarmEvent(POLLOUT, res.socket);break;
+       }
+    }
+    return Callback();
+
+
 }
+
+/* Disarm strategy
+ *
+ * Acquire the lock and try to find the socket and the event. We search in the list of
+ *  current waiting sockets and then in the lost of newly added sockets not yet processed.
+ *  It is easier to disarm newly added socket, because it only needs to remove it from the list.
+ *  However for currently waiting socket, we cannot delete the registration. We can move the
+ *  callback out and then set the timeout to 'now' and after that notify() is called
+ *  to restart waiting. The socket registration will be processed as timeouted, removed,
+ *  but without the callback, nothing will be executed.
+ *
+ */
+Dispatcher::Callback Dispatcher::disarmEvent(int event, SocketHandle socket) {
+    Callback cb_to_call;
+
+    std::unique_lock _(lk);
+    if (stopped) return Callback();
+    auto itr = std::find_if(waiting.begin(), waiting.end(), [&](const pollfd &fd) {
+        return fd.fd == socket && (fd.events & event) != 0;
+    });
+    if (itr == waiting.end()) {
+        itr = std::find_if(new_waiting.begin(), new_waiting.end(), [&](const pollfd &fd) {
+            return fd.fd == socket && (fd.events & event) != 0;
+        });
+        if (itr == waiting.end()) return Callback();
+        auto idx = std::distance(new_waiting.begin(), itr);
+        cb_to_call = std::move(new_regs[idx].cb);
+        new_regs.erase(new_regs.begin()+idx);
+        new_waiting.erase(itr);
+    } else {
+        auto idx = std::distance(waiting.begin(), itr);
+        cb_to_call = std::move(regs[idx].cb);
+        regs[idx].timeout = std::chrono::system_clock::now();
+        notify();
+    }
+
+    _.unlock();
+
+    return cb_to_call;
+}
+
+}
+
+

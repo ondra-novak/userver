@@ -47,6 +47,24 @@ public:
 	///Write asynchronously
 	virtual void write(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn) = 0;
 
+	///Cancels asynchronous read while it is pending
+	/**
+	 * @param set_timeouted set true to call associated callback as timeouted operation. Set
+	 * false to discard callback complete
+	 * @retval true canceled
+	 * @retval false no pending operation
+	 */
+	virtual bool cancelAsyncRead(bool set_timeouted = true) = 0;
+
+    ///Cancels asynchronous write while it is pending
+    /**
+     * @param set_timeouted set true to call associated callback as timeouted operation. Set
+     * false to discard callback complete
+     * @retval true canceled
+     * @retval false no pending operation
+     */
+    virtual bool cancelAsyncWrite(bool set_timeouted = true) = 0;
+
 	///Close the output
 	/** when output is closed, futher writes are rejected. The other side receives
 	 * EOF, however, reading is still possible

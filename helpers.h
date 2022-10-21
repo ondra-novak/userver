@@ -15,6 +15,7 @@
 #include <cctype>
 #include <ctime>
 #include "callback.h"
+#include <mutex>
 
 namespace userver {
 
@@ -103,6 +104,120 @@ inline void httpDate(std::time_t tpoint, Fn &&fn) {
 	 auto sz = std::strftime(buf, sizeof buf, "%a, %d %b %Y %H:%M:%S %Z", &tm);
 	 fn(std::string_view(buf,sz));
 }
+
+
+///Protects pending operation
+/**
+ * Small object connected with shared ptr. It is initialized by init() and then
+ * split into two parts, where one part has caller and second part goes into pending operation
+ *
+ * Caller can anytime later cancel operation by cancel. If this happens, pending operation can
+ * see this flag and stop processing the operation as soon as possible.
+ *
+ * Most used when there is asynchronous operation and caller objects is about destructed, it
+ * can cancel pending operation before the operation can possible access the object in question.
+ *
+ *
+ *
+ *
+ * @tparam Lock
+ */
+
+template<typename Lock>
+class PendingOpT {
+
+    struct Land {
+        Lock mx;
+        bool canceled = false;
+    };
+
+public:
+    ///Init the instance (it is empty after construction)
+    void init() {
+        land = std::make_shared<Land>();
+    }
+    ///Clears instance
+    void clear() {
+        land = nullptr;
+    }
+
+    ///Determines, whether the instance has been initialized
+    /**
+     * @retval true is inited
+     * @retval false is cleared
+     */
+    bool is_ready() const {
+        return land != nullptr;
+    }
+
+    ///Mark pending operation canceled.
+    void cancel() {
+        if (land != nullptr) {
+            std::lock_guard _(land->mx);
+            land->canceled = true;
+        }
+    }
+
+    ///Mark pending operation canceled and clears instance under lock of owning class
+    /**
+     * Solves problem with reversed locks. If this instance is protected by a lock
+     * inside of class, calling the cancel directly can cause reverse locking and deadlock
+     * as in finishing operation, first is PendingOp's lock acquired and then owner's lock,
+     * but in this case, owner's lock is already acquired. So the function is able
+     * to cancel pending operation while it releases owner's lock to give any pending
+     * operation chance to complete before it is canceled
+     *
+     * @param lk owner's class lock to be unlocked during cancelation
+     *
+     * @note function also clears the instance
+     */
+    template<typename Lk>
+    void cancel_clear(Lk &lk) {
+        if (land != nullptr) {
+            auto l = std::move(land);
+            lk.unlock();
+            std::lock_guard _(l->mx);
+            l->canceled = true;
+            lk.lock();
+        }
+    }
+
+    ///Determines whether operation is canceled
+    bool is_canceled() const {
+        std::lock_guard _(land->mx);
+        return land->canceled;
+    }
+
+    ///Finishes pending operation if was not canceled
+    /***
+     *
+     * @param fn function to call to finish
+     * @retval true operation successful
+     * @retval false operation was not run, because it was canceled
+     */
+    template<typename Fn>
+    bool finish_pending(Fn &&fn) const {
+        std::lock_guard _(land->mx);
+        if (!land->canceled) {
+            fn();
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    template<typename Fn>
+    bool operator>>(Fn &&fn) const {
+        return finish_pending(std::forward<Fn>(fn));
+    }
+
+
+protected:
+    std::shared_ptr<Land> land;
+
+};
+
+using PendingOp = PendingOpT<std::mutex>;
 
 }
 

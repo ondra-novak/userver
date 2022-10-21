@@ -4,6 +4,7 @@
  *  Created on: 27. 1. 2021
  *      Author: ondra
  */
+#include "socketresource.h"
 
 #ifndef _WIN32
 
@@ -11,6 +12,7 @@
 #include <fcntl.h>
 #include <cerrno>
 #include <sys/epoll.h>
+#include "socketresource.h"
 #include "dispatcher_epoll.h"
 
 #include <arpa/inet.h>
@@ -44,6 +46,21 @@ Dispatcher_EPoll::~Dispatcher_EPoll() {
 	::close(epoll_fd);
 }
 
+bool Dispatcher_EPoll::waitAsync(IAsyncResource &&resource,  Callback &&cb, std::chrono::system_clock::time_point timeout) {
+    if (typeid(resource) == typeid(SocketResource)) {
+       const SocketResource &res = static_cast<const SocketResource &>(resource);
+       switch (res.op) {
+           default:
+           case SocketResource::read: waitRead(res.socket, std::move(cb), timeout);break;
+           case SocketResource::write: waitWrite(res.socket, std::move(cb), timeout);break;
+       }
+       return true;
+    } else {
+       return false;
+    }
+
+}
+
 void Dispatcher_EPoll::waitRead(int socket, Callback &&cb,
 		std::chrono::system_clock::time_point timeout) {
 	regWait(socket,Op::read , std::move(cb), timeout);
@@ -54,14 +71,16 @@ void Dispatcher_EPoll::waitWrite(int socket, Callback &&cb,
 	regWait(socket,Op::write, std::move(cb), timeout);
 }
 
-void Dispatcher_EPoll::execAsync(Callback &&cb) {
-	regImmCall(std::move(cb));
 
+void Dispatcher_EPoll::interrupt() {
+    if (!intr.exchange(true)) {
+        notify();
+    }
 }
 
+
 void Dispatcher_EPoll::stop() {
-	bool need = false;
-	if (stopped.compare_exchange_strong(need, true)) {
+	if (!stopped.exchange(true)) {
 		notify();
 	}
 	std::lock_guard _(lock);
@@ -111,7 +130,7 @@ void Dispatcher_EPoll::notify() {
 }
 
 Dispatcher_EPoll::Task Dispatcher_EPoll::getTask() {
-	while (!stopped.load()) {
+	if (!stopped.load()) {
 		int r;
 		std::unique_lock mx(lock, std::defer_lock);
 		epoll_event ev;
@@ -230,8 +249,37 @@ int Dispatcher_EPoll::getWaitTime() const {
 
 int Dispatcher_EPoll::getTmFd() const {
 	auto iter = tm_map.begin();
-	if (iter == tm_map.end()) return pipe_rd;
+	if (iter == tm_map.end()) return event_fd;
 	return iter->second;
+}
+
+Dispatcher_EPoll::Callback Dispatcher_EPoll::stopWait(IAsyncResource &&resource) {
+    if (typeid(resource) == typeid(SocketResource)) {
+          const SocketResource &res = static_cast<const SocketResource &>(resource);
+          switch (res.op) {
+              case SocketResource::read: return disarm(Op::read, res.socket);break;
+              case SocketResource::write: disarm(Op::write, res.socket);break;
+          }
+    }
+    return Callback();
+}
+
+Dispatcher_EPoll::Callback Dispatcher_EPoll::disarm(Op op, int socket) {
+    std::lock_guard _(lock);
+    auto iter = fd_map.find(socket);
+    if (iter != fd_map.end()) {
+        auto iter2 = std::find_if(iter->second.begin(), iter->second.end(), [&](const Reg &r) {
+           return r.op == op;
+        });
+        if (iter2 != iter->second.end()) {
+            iter2->timeout = std::chrono::system_clock::now();
+            Callback cb ( std::move(iter2->cb));
+            notify();
+            return cb;
+
+        }
+    }
+    return Callback();
 }
 
 }

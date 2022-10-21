@@ -90,7 +90,7 @@ static std::string_view statusMessages[] = {
 
 std::atomic<std::size_t> HttpServerRequest::identCounter(0);
 
-static std::string_view getStatusCodeMsg(int code) {
+std::string_view getStatusCodeMsg(int code) {
 	char num[100];
 	snprintf(num,100,"%d",code);
 	std::string_view codestr(num);
@@ -121,6 +121,15 @@ std::size_t HeaderValue::getUInt() const {
 	}
 	return n;
 }
+
+
+std::string_view HeaderValue::splitAt(const std::string_view &at, std::string_view &where) {
+	return ::userver::splitAt(at,  where);
+}
+void HeaderValue::trim(std::string_view &what) {
+	::userver::trim(what);
+}
+
 
 bool HeaderValue::lessHeader(const std::pair<std::string_view, std::string_view> &a,
 				const std::pair<std::string_view, std::string_view> &b) {
@@ -247,6 +256,10 @@ std::string_view HttpServerRequest::getMethod() const {
 
 std::string_view HttpServerRequest::getPath() const {
 	return path;
+}
+std::string_view HttpServerRequest::getRootPath() const {
+	std::string_view p = path.substr(0, root_offset);
+	return p;
 }
 
 std::string_view HttpServerRequest::getHTTPVer() const {
@@ -571,26 +584,31 @@ void HttpServerRequest::sendErrorPage(int code) {
 	sendErrorPage(code, std::string_view());
 }
 
+static void std_error_page(HttpServerRequest &req, int code, const std::string_view &description) {
+	std::ostringstream body;
+	auto msg = getStatusCodeMsg(code);
+	body << "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+			"<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">"
+			"<html xmlns=\"http://www.w3.org/1999/xhtml\">"
+			"<head>"
+			"<title>" << code << " " << msg<<"</title>"
+			"</head>"
+			"<body>"
+			"<h1>"  << code << " " << msg <<"</h1>"
+			"<p><![CDATA[" << description << "]]></p>"
+			"</body>"
+			"</html>";
+	req.setContentType("application/xhtml+xml");
+	req.setStatus(code);
+	req.send(body.str());
+
+}
+
 void HttpServerRequest::sendErrorPage(int code, const std::string_view &description) {
 	if (!response_sent) {
-		std::ostringstream body;
-		auto msg = getStatusCodeMsg(code);
-		body << "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-				"<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">"
-				"<html xmlns=\"http://www.w3.org/1999/xhtml\">"
-				"<head>"
-				"<title>" << code << " " << msg<<"</title>"
-				"</head>"
-				"<body>"
-				"<h1>"  << code << " " << msg <<"</h1>"
-				"<p><![CDATA[" << description << "]]></p>"
-				"</body>"
-				"</html>";
-		setContentType("application/xhtml+xml");
-		setStatus(code);
-		send(body.str());
+		if (logger) logger->error_page(*this, code, description);
+		else std_error_page(*this, code, description);
 	}
-
 }
 
 void HttpServerRequest::setCookie(const std::string_view &name,
@@ -847,6 +865,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 	auto iter = mapping->hostMapping.find(host);
 	auto iend = mapping->hostMapping.end();
 	if (iter == iend) {
+		req->setRootOffset(0);
 		if (execHandler(req, vpath)) {
 			_.unlock();
 			std::unique_lock __(mapping->shrmux);
@@ -858,6 +877,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 		auto p = vpath.find('/',1);
 		while (p<q) {
 			prefix = vpath.substr(0, p);
+			req->setRootOffset(p);
 			if (execHandler(req, vpath.substr(p))) {
 				_.unlock();
 				std::unique_lock __(mapping->shrmux);
@@ -882,6 +902,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 		}
 
 		auto plen = prefix.length();
+		req->setRootOffset(plen);
 		if (vpath.length() > plen
 			&& vpath.substr(0,plen) == prefix
 			&& vpath[plen] == '/'
@@ -900,6 +921,7 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 				prefix = std::string_view();
 			}
 			auto plen = prefix.length();
+			req->setRootOffset(plen);
 			if (vpath.length() > plen
 				&& vpath.substr(0,plen) == prefix
 				&& vpath[plen] == '/'
@@ -914,36 +936,16 @@ bool HttpServerMapper::execHandlerByHost(PHttpServerRequest &req) {
 	return false;
 }
 
-class Logger: public HttpServerRequest::ILogger {
-public:
-	Logger(HttpServer &owner):owner(owner) {}
-	virtual void handler_log(const HttpServerRequest &req, LogLevel level, const std::string_view &msg) noexcept;
-	virtual void log(ReqEvent event, const HttpServerRequest &req) noexcept;
-	HttpServer &owner;
-};
 
-void HttpServer::start(NetAddrList listenSockets, unsigned int threads, AsyncProvider a) {
+
+void HttpServer::start(NetAddrList listenSockets, AsyncProvider a) {
 	if (socketServer.has_value()) return;
 
 	socketServer.emplace(listenSockets);
 
-	for (unsigned int i = 0; i < threads; i++) {
-		this->threads.emplace_back([a, this]() mutable {
-			setThreadAsyncProvider(a);
-			while (true) {
-				try {
-					a.start_thread();
-					return;
-				} catch (...) {
-					unhandled();
-				}
-			}
-		});
-	}
 	asyncProvider = a;
 
-	logger = std::make_unique<Logger>(*this);
-
+	logger = new Logger(*this);
 
 	a.runAsync([=]{
 		listen();
@@ -952,10 +954,10 @@ void HttpServer::start(NetAddrList listenSockets, unsigned int threads, AsyncPro
 }
 
 
-void HttpServer::start(NetAddrList listenSockets, unsigned int threads, unsigned int dispatchers) {
+void HttpServer::start(NetAddrList listenSockets, const AsyncProviderConfig &cfg) {
 	if (socketServer.has_value()) return;
 
-	start(listenSockets, threads, createAsyncProvider(dispatchers));
+	start(listenSockets, createAsyncProvider(cfg));
 }
 
 void HttpServer::listen() {
@@ -975,12 +977,10 @@ void HttpServer::listen() {
 
 
 
-void HttpServer::addThread() {
-	setThreadAsyncProvider(asyncProvider);
+void HttpServer::runAsWorker() {
 	while (true) {
 		try {
-			asyncProvider.start_thread();
-			setThreadAsyncProvider(nullptr);
+			asyncProvider.runAsWorker();
 			return;
 		} catch (...) {
 			unhandled();
@@ -994,6 +994,7 @@ AsyncProvider HttpServer::getAsyncProvider() {
 
 HttpServer::~HttpServer() {
 	stop();
+	logger->close();
 }
 
 void HttpServer::stop() {
@@ -1004,24 +1005,27 @@ void HttpServer::stop() {
 	threads.clear();
 }
 
-void HttpServer::log(ReqEvent event, const HttpServerRequest &req) {
+void HttpServer::log(ReqEvent event, const HttpServerRequest &req) noexcept {
 	if (event == ReqEvent::done) {
 		std::lock_guard _(lock);
 		buildLogMsg(std::cout, req);
 	}
 }
 
-void HttpServer::log(const HttpServerRequest &, const std::string_view &msg) {
+void HttpServer::log(const HttpServerRequest &, const std::string_view &msg) noexcept {
 	std::lock_guard _(lock);
 	buildLogMsg(std::cout, msg);
 }
 
-void HttpServer::log(const HttpServerRequest &r, LogLevel, const std::string_view &msg) {
+void HttpServer::log(const HttpServerRequest &r, LogLevel, const std::string_view &msg) noexcept {
 	std::lock_guard _(lock);
 	log(r,msg);
 }
+void HttpServer::error_page(HttpServerRequest &r, int status, const std::string_view &desc) noexcept {
+	std_error_page(r, status, desc);
+}
 
-void HttpServer::unhandled() {
+void HttpServer::unhandled() noexcept {
 	try {
 		throw;
 	} catch (const std::exception &e) {
@@ -1035,7 +1039,7 @@ void HttpServer::unhandled() {
 
 
 void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
-	req->setLogger(logger.get());
+	req->setLogger(PLogger::staticCast(logger));
 	s.read() >> [this, req = std::move(req)](Stream &s, const std::string_view &data) mutable {
 		if (!data.empty()) {
 			s.putBack(data);
@@ -1048,8 +1052,20 @@ void HttpServer::beginRequest(Stream &&s, PHttpServerRequest &&req) {
 						newreq->reuse_buffers(req);
 						beginRequest(std::move(s), std::move(newreq));
 					});
-					if (!execHandlerByHost(req)) {
-						req->sendErrorPage(404);
+					try {
+						if (!execHandlerByHost(req)) {
+							req->sendErrorPage(404);
+						}
+					} catch (...) {
+						if (req != nullptr && !req->isResponseSent()) {
+							try{
+								req->sendErrorPage(500, "An unexpected error occurred while processing the request. See the log file for a description of the error");
+							} catch (...) {
+								//empty
+							}
+						}
+						throw;
+
 					}
 				}
 			});
@@ -1120,12 +1136,19 @@ void formatToLog(std::vector<char> &log, const double &v) {
 	formatToLog(log, std::to_string(v));
 }
 
-void Logger::handler_log(const HttpServerRequest &req, LogLevel level, const std::string_view &msg) noexcept {
-	owner.log(req, level, msg);
+void HttpServer::Logger::handler_log(const HttpServerRequest &req, LogLevel level, const std::string_view &msg) noexcept {
+    std::shared_lock _(mx);
+	if (!closed) owner.log(req, level, msg);
 }
 
-void Logger::log(ReqEvent event, const HttpServerRequest &req) noexcept {
-	owner.log(event, req);
+void HttpServer::Logger::log(ReqEvent event, const HttpServerRequest &req) noexcept {
+    std::shared_lock _(mx);
+    if (!closed) owner.log(event, req);
+}
+
+void HttpServer::Logger::error_page(HttpServerRequest &req, int status, const std::string_view &desc) noexcept {
+    std::shared_lock _(mx);
+    if (!closed) owner.error_page(req,status,desc);
 }
 
 Stream& HttpServerRequest::getStream() {
@@ -1137,10 +1160,10 @@ bool HttpServerRequest::directoryRedir() {
 	std::string_view query;
 	std::string_view path;
 	if (astq != path.npos) {
-		path = path.substr(0,astq);
-		query = path.substr(astq);
+		path = this->path.substr(0,astq);
+		query = this->path.substr(astq);
 	} else {
-		path = path;
+		path = this->path;
 	}
 	if (path.empty() || path.back() != '/') {
 		std::string newuri;
@@ -1296,6 +1319,11 @@ bool HttpServerRequest::reserveBodyBuffer(std::size_t maxSize, std::vector<char>
 		}
 	}
 	return true;
+}
+
+void HttpServer::Logger::close() {
+    std::lock_guard _(mx);
+    closed = true;
 }
 
 }

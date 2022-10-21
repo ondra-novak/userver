@@ -9,11 +9,11 @@
 #include <poll.h>
 #include <unistd.h>
 #include <userver/async_provider.h>
-#include <userver/async_resource.h>
 #include "filedesc.h"
 #include <cerrno>
 #include <system_error>
 #include <sstream>
+#include "socketresource.h"
 
 namespace userver  {
 
@@ -137,7 +137,7 @@ void FileDesc::read(void *buffer, std::size_t size, CallbackT<void(int)> &&fn) {
 	if (r < 0) {
 		int err = errno;
 		if (err == EWOULDBLOCK) {
-			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::read, fd), [this, buffer, size, fn = std::move(fn)](bool succ){
+			getCurrentAsyncProvider().runAsync(SocketResource(SocketResource::read, fd), [this, buffer, size, fn = std::move(fn)](bool succ){
 				if (!succ) {
 					this->tm = true;
 					fn(0);
@@ -161,7 +161,7 @@ void FileDesc::write(const void *buffer, std::size_t size, CallbackT<void(int)> 
 	if (r < 0) {
 		int err = errno;
 		if (err == EWOULDBLOCK) {
-			getCurrentAsyncProvider().runAsync(AsyncResource(AsyncResource::write, fd), [this, buffer, size, fn = std::move(fn)](bool succ){
+			getCurrentAsyncProvider().runAsync(SocketResource(SocketResource::write, fd), [this, buffer, size, fn = std::move(fn)](bool succ){
 				if (!succ) {
 					this->tm = true;
 					fn(0);

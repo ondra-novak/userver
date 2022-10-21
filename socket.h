@@ -29,6 +29,8 @@ public:
 	void write(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn) override;
 	void write2(const void *buffer, std::size_t size, CallbackT<void(int)> &&fn, bool async) ;
 
+    virtual bool cancelAsyncRead(bool set_timeouted = true) override;
+    virtual bool cancelAsyncWrite(bool set_timeouted = true) override;
 
 	void closeOutput() override;
 	void closeInput() override;

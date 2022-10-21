@@ -26,11 +26,13 @@ public:
 	Dispatcher_EPoll();
 	virtual ~Dispatcher_EPoll() override;
 
-	virtual void waitRead(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) override;
-	virtual void waitWrite(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout) override;
-	virtual void execAsync(Callback &&cb) override;
-	virtual Task getTask() override;
+    virtual bool waitAsync(IAsyncResource &&resource,  Callback &&cb, std::chrono::system_clock::time_point timeout) override;
+	virtual void waitRead(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout);
+	virtual void waitWrite(SocketHandle socket, Callback &&cb, std::chrono::system_clock::time_point timeout);
+    virtual Task getTask() override;
+	virtual void interrupt() override;
 	virtual void stop() override;
+	virtual Callback stopWait(IAsyncResource &&resource) override;
 
 
 protected:
@@ -66,15 +68,14 @@ protected:
 
 	int epoll_fd;
 	int event_fd;
-	int pipe_wr;
-	int pipe_rd;
+
 	std::mutex lock;
 	std::queue<Callback> imm_calls;
 
 	FDMap fd_map;
 	TMMap tm_map;
 
-	std::atomic_bool stopped;
+	std::atomic_bool stopped, intr;
 
 
 	void regWait(int socket, Op, Callback &&cb, std::chrono::system_clock::time_point timeout);
@@ -83,6 +84,7 @@ protected:
 	void rearm_fd(bool first_call, int socket, RegList &lst);
 	int getWaitTime() const;
 	int getTmFd() const;
+	Callback disarm(Op op, int socket);
 };
 
 }

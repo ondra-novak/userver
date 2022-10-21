@@ -8,10 +8,11 @@
 
 #include "platform.h"
 #include "netaddr.h"
-#include "async_resource.h"
 #include "dgramsocket.h"
 
 #include <system_error>
+
+#include "socketresource.h"
 namespace userver {
 
 DGramSocket::DGramSocket(int i):s(i) {
@@ -78,10 +79,14 @@ void DGramSocket::send(const std::string_view &data, const NetAddr &target) {
 			pfd.revents = 0;
 			r = poll(&pfd, 1, -1);
 			if (r < 0) {
-				if (err == EINTR) return send(data, target);
+				if (err == EINTR) {
+				    send(data, target);
+				    return;
+				}
 				throw std::system_error(errno, std::generic_category());
 			} else {
-				return send(data,target);
+				send(data,target);
+				return;
 			}
 
 		}
@@ -115,8 +120,8 @@ DGramSocket& DGramSocket::operator =(DGramSocket &&other) {
 
 }
 
-const AsyncResource &DGramSocket::getReadAsync()  {
-	AsyncResource *a = new(static_cast<void *>(inputBuffer.data())) AsyncResource(AsyncResource::read, s);
+const SocketResource &DGramSocket::getReadAsync()  {
+	SocketResource *a = new(static_cast<void *>(inputBuffer.data())) SocketResource(SocketResource::read, s);
 	return *a;
 }
 

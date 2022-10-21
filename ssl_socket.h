@@ -52,6 +52,8 @@ public:
 	virtual void setRdTimeout(int tm)  override;
 	virtual int getRdTimeout() const  override;
 	virtual void clearTimeout() override;
+    virtual bool cancelAsyncRead(bool set_timeouted = true) override;
+    virtual bool cancelAsyncWrite(bool set_timeouted = true) override;
 
 protected:
 
