@@ -63,7 +63,7 @@ protected:
 
 AsyncProvider createAsyncProvider(const AsyncProviderConfig &cfg) {
     AsyncProvider prov = std::make_shared<AsyncProviderImpl>();
-    for (unsigned int i = 0; i < cfg.socket_dispatchers; i++) {
+    for ( int i = 0; i < cfg.socket_dispatchers; i++) {
 #ifdef _WIN32
         prov->addDispatcher(std::make_unique<Dispatcher>());
 #else
@@ -75,7 +75,7 @@ AsyncProvider createAsyncProvider(const AsyncProviderConfig &cfg) {
 #endif
     }
     if (cfg.scheduler) installScheduler(prov);
-    for (unsigned int i = 0; i < cfg.threads; i++) {
+    for (int i = 0; i < cfg.threads; i++) {
            prov.addThread();
     }
     return prov;
